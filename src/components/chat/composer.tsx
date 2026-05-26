@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowUp,
@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toaster';
-import { ALLOWED_MIME, MAX_FILE_BYTES } from '@/lib/validation';
-import { createClient } from '@/lib/supabase/client';
+import { ALLOWED_MIME } from '@/lib/validation';
+import { useFileUpload } from '@/lib/use-file-upload';
 import type { Attachment } from '@/lib/types';
 
 interface Props {
@@ -22,17 +22,35 @@ interface Props {
   onSend: (content: string, attachments: Attachment[]) => void;
   onGenerateImage: (prompt: string) => void;
   disabled: boolean;
+  // Optional: parent can inject attachments dropped on chat area
+  externalAttachments?: Attachment[];
+  onConsumeExternal?: () => void;
 }
 
-export function Composer({ conversationId, onSend, onGenerateImage, disabled }: Props) {
+export function Composer({
+  conversationId,
+  onSend,
+  onGenerateImage,
+  disabled,
+  externalAttachments,
+  onConsumeExternal,
+}: Props) {
   const [text, setText] = useState('');
   const [imageMode, setImageMode] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const { upload, uploading } = useFileUpload(conversationId);
+
+  // Pull in attachments dropped on the chat area (from parent)
+  useEffect(() => {
+    if (externalAttachments && externalAttachments.length > 0) {
+      setAttachments((prev) => [...prev, ...externalAttachments].slice(0, 4));
+      onConsumeExternal?.();
+    }
+  }, [externalAttachments, onConsumeExternal]);
 
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
@@ -59,100 +77,10 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
   }
 
   async function handleFiles(files: File[]) {
-    // eslint-disable-next-line no-console
-    console.log('[handleFiles] called with', files.length, 'files. existing attachments:', attachments.length);
-
-    if (attachments.length >= 4) {
-      toast({ title: 'Up to 4 attachments per message', variant: 'error' });
-      return;
+    const newOnes = await upload(files, attachments.length);
+    if (newOnes.length > 0) {
+      setAttachments((a) => [...a, ...newOnes]);
     }
-
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      // eslint-disable-next-line no-console
-      console.log('[handleFiles] no user');
-      toast({ title: 'Please sign in again', variant: 'error' });
-      return;
-    }
-
-    setUploading(true);
-    const newAttachments: Attachment[] = [];
-    const remainingSlots = Math.max(0, 4 - attachments.length);
-    const fileList = files.slice(0, remainingSlots);
-    // eslint-disable-next-line no-console
-    console.log('[handleFiles] will process', fileList.length, 'of', files.length, 'files');
-
-    for (const file of fileList) {
-      // eslint-disable-next-line no-console
-      console.log('[handleFiles] processing', file.name, '|type:', file.type, '|size:', file.size);
-      // Some browsers (or HEIC, etc.) report empty MIME — fall back to extension
-      const inferredType =
-        file.type ||
-        (() => {
-          const e = file.name.split('.').pop()?.toLowerCase() ?? '';
-          if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
-          if (e === 'png') return 'image/png';
-          if (e === 'webp') return 'image/webp';
-          if (e === 'gif') return 'image/gif';
-          if (e === 'pdf') return 'application/pdf';
-          if (e === 'txt') return 'text/plain';
-          if (e === 'md') return 'text/markdown';
-          return '';
-        })();
-
-      if (!ALLOWED_MIME.includes(inferredType)) {
-        toast({
-          title: 'File type not allowed',
-          description: `${file.name} (${file.type || 'unknown type'})`,
-          variant: 'error',
-        });
-        continue;
-      }
-      if (file.size > MAX_FILE_BYTES) {
-        toast({ title: 'File too large', description: `${file.name} is over 8MB`, variant: 'error' });
-        continue;
-      }
-      const ext = file.name.split('.').pop()?.toLowerCase() ?? 'bin';
-      const id = crypto.randomUUID();
-      const path = `${user.id}/${conversationId}/${id}.${ext}`;
-      const { error } = await supabase.storage.from('attachments').upload(path, file, {
-        contentType: inferredType,
-        upsert: false,
-      });
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error('[upload]', error);
-        toast({
-          title: 'Upload failed',
-          description: error.message + ' — check that the "attachments" bucket exists and RLS policies are set.',
-          variant: 'error',
-        });
-        continue;
-      }
-      const { data: signed, error: signErr } = await supabase.storage
-        .from('attachments')
-        .createSignedUrl(path, 3600);
-      if (signErr) {
-        // eslint-disable-next-line no-console
-        console.error('[sign]', signErr);
-      }
-      newAttachments.push({
-        id,
-        name: file.name,
-        type: inferredType,
-        size: file.size,
-        path,
-        url: signed?.signedUrl,
-        kind: inferredType.startsWith('image') ? 'image' : 'document',
-      });
-    }
-    setAttachments((a) => [...a, ...newAttachments]);
-    setUploading(false);
-    // eslint-disable-next-line no-console
-    console.log('[handleFiles] done. added', newAttachments.length);
   }
 
   function toggleVoice() {
@@ -324,16 +252,10 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
           className="hidden"
           onChange={(e) => {
             const f = e.target.files;
-            // Snapshot the FileList into a real array BEFORE clearing the input,
-            // because FileList is a live reference and becomes empty when value=''.
             const snapshot = f ? Array.from(f) : [];
             e.target.value = '';
-            // eslint-disable-next-line no-console
-            console.log('[file input onChange] snapshot length:', snapshot.length);
             if (snapshot.length > 0) {
               handleFiles(snapshot);
-            } else {
-              toast({ title: 'No files selected', variant: 'error' });
             }
           }}
         />

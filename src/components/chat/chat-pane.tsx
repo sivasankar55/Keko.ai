@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Square } from 'lucide-react';
+import { Square, Upload, ChevronDown, BookOpen } from 'lucide-react';
 import { MessageBubble } from './message-bubble';
 import { Composer } from './composer';
+import { DocumentsModal } from '@/components/documents-modal';
 import { getPersona } from '@/lib/personas';
 import { toast } from '@/components/ui/toaster';
+import { useFileUpload } from '@/lib/use-file-upload';
 import type { Conversation, Message, Attachment, Persona } from '@/lib/types';
 
 interface Props {
@@ -21,19 +23,86 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const dragDepth = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
+  const [pendingDrop, setPendingDrop] = useState<Attachment[] | undefined>(undefined);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [docCount, setDocCount] = useState(0);
+  const { upload } = useFileUpload(conversation.id);
 
   const persona = getPersona(conversation.persona_id, customPersonas);
+
+  // Fetch doc count for this conversation
+  useEffect(() => {
+    fetch(`/api/rag/documents?conversationId=${conversation.id}`)
+      .then((r) => r.json())
+      .then((j) => setDocCount((j.documents ?? []).filter((d: any) => d.status === 'ready').length))
+      .catch(() => {});
+  }, [conversation.id, docsOpen]);
 
   useEffect(() => {
     setMessages(initialMessages);
   }, [initialMessages, conversation.id]);
 
   useEffect(() => {
+    if (!autoScroll) return;
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: 'smooth',
     });
-  }, [messages, streaming]);
+  }, [messages, streaming, autoScroll]);
+
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setAutoScroll(distanceFromBottom < 80);
+  }
+
+  function jumpToLatest() {
+    setAutoScroll(true);
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
+  }
+
+  // Drag-and-drop handlers
+  function onDragEnter(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragActive(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragActive(false);
+    }
+  }
+  async function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    const uploaded = await upload(files, 0);
+    if (uploaded.length > 0) {
+      setPendingDrop(uploaded);
+      toast({
+        title: `${uploaded.length} attachment${uploaded.length > 1 ? 's' : ''} ready`,
+        variant: 'success',
+      });
+    }
+  }
 
   function stopGeneration() {
     abortRef.current?.abort();
@@ -95,7 +164,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
       }
     } catch (e: any) {
       if (e.name === 'AbortError') {
-        // Mark as stopped, don't append error text
+        // Stopped by user; if nothing streamed, mark as stopped, otherwise keep partial.
         setMessages((m) => {
           const next = [...m];
           const last = next[next.length - 1];
@@ -104,17 +173,18 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
           }
           return next;
         });
-        return;
+        // Don't return — let finally run so DB partial is synced.
+      } else {
+        setMessages((m) => {
+          const next = [...m];
+          next[next.length - 1] = {
+            ...next[next.length - 1],
+            content: 'Something went wrong. ' + (e.message ?? ''),
+          };
+          return next;
+        });
+        toast({ title: 'Message failed', description: e.message, variant: 'error' });
       }
-      setMessages((m) => {
-        const next = [...m];
-        next[next.length - 1] = {
-          ...next[next.length - 1],
-          content: 'Something went wrong. ' + (e.message ?? ''),
-        };
-        return next;
-      });
-      toast({ title: 'Message failed', description: e.message, variant: 'error' });
     } finally {
       // Sync local state with the database — replaces optimistic `temp-*` IDs
       // with real ones so subsequent delete/regenerate/edit work after a refresh.
@@ -294,18 +364,60 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col h-full relative"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      <AnimatePresence>
+        {dragActive && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="drop-overlay"
+          >
+            <div className="text-center">
+              <Upload className="h-10 w-10 mx-auto text-accent mb-3" />
+              <p className="font-display text-[28px] tracking-tight">Drop to attach</p>
+              <p className="text-subtle text-[13px] mt-1">
+                Up to 4 files. Images, PDFs, and text up to 8MB each.
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="px-6 lg:px-8 py-4 border-b border-hairline">
         <div className="max-w-3xl mx-auto flex items-baseline gap-3">
           <span className="text-[14px] opacity-60">{persona.emoji}</span>
           <p className="text-[14px] text-fg truncate">{conversation.title}</p>
-          <p className="text-[12px] text-faint truncate ml-auto">
+          <button
+            onClick={() => setDocsOpen(true)}
+            className="ml-auto text-[11.5px] text-faint hover:text-fg transition flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted"
+            title="Documents"
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            {docCount > 0 ? (
+              <span>{docCount} doc{docCount === 1 ? '' : 's'}</span>
+            ) : (
+              <span className="hidden sm:inline">Docs</span>
+            )}
+          </button>
+          <p className="text-[12px] text-faint truncate">
             {persona.name}{persona.custom ? ' · custom' : ''}
           </p>
         </div>
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 lg:px-8 py-10">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto px-6 lg:px-8 py-10"
+      >
         <div className="max-w-3xl mx-auto space-y-7">
           {messages.length === 0 && (
             <motion.div
@@ -368,11 +480,37 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         </div>
       </div>
 
+      <div className="relative">
+        <AnimatePresence>
+          {!autoScroll && (
+            <motion.button
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.2 }}
+              onClick={jumpToLatest}
+              className="absolute -top-12 left-1/2 -translate-x-1/2 surface rounded-full px-3.5 py-1.5 text-[12px] flex items-center gap-1.5 hover:border-fg/40 transition shadow-sm"
+            >
+              <ChevronDown className="h-3 w-3" />
+              Jump to latest
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </div>
+
       <Composer
         conversationId={conversation.id}
         onSend={sendMessage}
         onGenerateImage={generateImage}
         disabled={streaming}
+        externalAttachments={pendingDrop}
+        onConsumeExternal={() => setPendingDrop(undefined)}
+      />
+
+      <DocumentsModal
+        open={docsOpen}
+        onClose={() => setDocsOpen(false)}
+        conversationId={conversation.id}
       />
     </div>
   );

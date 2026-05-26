@@ -16,6 +16,7 @@ import {
   Pin,
   PinOff,
   Sparkles,
+  Share2,
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { cn, truncate } from '@/lib/utils';
@@ -31,6 +32,7 @@ interface Props {
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onPinToggle: (id: string, pinned: boolean) => void;
+  onShare: (id: string) => void;
   onOpenPalette: () => void;
   onOpenPersonaModal: () => void;
   onClose?: () => void;
@@ -45,6 +47,7 @@ export function Sidebar({
   onDelete,
   onRename,
   onPinToggle,
+  onShare,
   onOpenPalette,
   onOpenPersonaModal,
   onClose,
@@ -240,6 +243,15 @@ export function Sidebar({
                           >
                             {isPinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
                             {isPinned ? 'Unpin' : 'Pin'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              onShare(c.id);
+                              setOpenMenu(null);
+                            }}
+                            className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
+                          >
+                            <Share2 className="h-3 w-3" /> Share
                           </button>
                           <button
                             onClick={() => {

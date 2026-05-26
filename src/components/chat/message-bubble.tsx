@@ -4,10 +4,23 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import rehypeHighlight from 'rehype-highlight';
 import { FileText, ImageIcon, Copy, RefreshCw, Pencil, Check, Trash2 } from 'lucide-react';
 import type { Message } from '@/lib/types';
 import { cn, formatTime } from '@/lib/utils';
+import { CodeBlock } from './code-block';
+
+// Allow class on code/pre/span so syntax highlighting can apply colors.
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [...(defaultSchema.attributes?.code ?? []), 'className'],
+    span: [...(defaultSchema.attributes?.span ?? []), 'className'],
+    pre: [...(defaultSchema.attributes?.pre ?? []), 'className'],
+  },
+};
 
 interface Props {
   message: Message;
@@ -130,7 +143,24 @@ export function MessageBubble({
         </p>
       ) : (
         <div className="prose-luxe">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[[rehypeSanitize, sanitizeSchema], rehypeHighlight]}
+            components={{
+              pre: ({ children }) => <>{children}</>,
+              code: ({ className, children, ...props }) => {
+                const isBlock = className?.startsWith('language-');
+                if (!isBlock) {
+                  return (
+                    <code className={className} {...props}>
+                      {children}
+                    </code>
+                  );
+                }
+                return <CodeBlock className={className}>{children}</CodeBlock>;
+              },
+            }}
+          >
             {message.content}
           </ReactMarkdown>
         </div>

@@ -4,6 +4,7 @@ import { genAI, CHAT_MODEL, FALLBACK_MODELS, type HistoryItem } from '@/lib/ai';
 import { chatRequestSchema } from '@/lib/validation';
 import { limitChat } from '@/lib/rate-limit';
 import { getPersona } from '@/lib/personas';
+import { embed } from '@/lib/embeddings';
 import type { Part } from '@google/generative-ai';
 
 export const runtime = 'nodejs';
@@ -161,7 +162,56 @@ export async function POST(request: NextRequest) {
     message.trim().length > 0
       ? message
       : 'Describe and analyze the attached file(s) in detail.';
-  const userParts: Part[] = [{ text: promptText }, ...attachmentParts];
+
+  // RAG: retrieve top-k chunks scoped to this conversation if any documents exist.
+  let ragContext = '';
+  let ragSources: { document_name: string; chunk_index: number }[] = [];
+  try {
+    const { count } = await supabase
+      .from('rag_documents')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('conversation_id', conversationId)
+      .eq('status', 'ready');
+
+    if ((count ?? 0) > 0 && message.trim().length >= 4) {
+      const queryEmbedding = await embed(message, 'RETRIEVAL_QUERY');
+      const { data: matches } = await supabase.rpc('match_rag_chunks', {
+        p_user_id: user.id,
+        p_query_embedding: queryEmbedding as any,
+        p_match_count: 6,
+        p_conversation_id: conversationId,
+      });
+      if (matches && matches.length > 0) {
+        const blocks = matches
+          .filter((m: any) => m.similarity > 0.55)
+          .map(
+            (m: any, i: number) =>
+              `[${i + 1}] (${m.document_name}, section ${m.chunk_index + 1})\n${m.content}`,
+          );
+        if (blocks.length > 0) {
+          ragContext =
+            '\n\n--- DOCUMENT CONTEXT ---\n' +
+            'Use the following excerpts from the user\'s uploaded documents to answer their question. ' +
+            'Cite passages by their bracket number when relevant. If the documents don\'t answer the question, say so plainly.\n\n' +
+            blocks.join('\n\n---\n\n') +
+            '\n--- END OF DOCUMENT CONTEXT ---\n\n';
+          ragSources = matches.map((m: any) => ({
+            document_name: m.document_name,
+            chunk_index: m.chunk_index,
+          }));
+        }
+      }
+    }
+  } catch (e) {
+    // RAG failure shouldn't break chat — just log and continue.
+    // eslint-disable-next-line no-console
+    console.warn('[rag] retrieval failed:', e);
+  }
+
+  const finalPromptText = ragContext + promptText;
+  const userParts: Part[] = [{ text: finalPromptText }, ...attachmentParts];
+  void ragSources;
 
   // Stream the response, with fallback models if the primary is overloaded
   const encoder = new TextEncoder();

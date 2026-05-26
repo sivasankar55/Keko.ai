@@ -9,6 +9,7 @@ import { ChatPane } from './chat-pane';
 import { EmptyState } from './empty-state';
 import { CommandPalette } from '@/components/command-palette';
 import { PersonaModal } from '@/components/persona-modal';
+import { ShareModal } from '@/components/share-modal';
 import type { Conversation, Message, Persona } from '@/lib/types';
 import { PERSONAS } from '@/lib/personas';
 import { toast } from '@/components/ui/toaster';
@@ -34,6 +35,7 @@ export function ChatShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [personaModalOpen, setPersonaModalOpen] = useState(false);
+  const [shareConvId, setShareConvId] = useState<string | null>(null);
 
   useEffect(() => {
     setConversations(initialConvs);
@@ -154,6 +156,7 @@ export function ChatShell({
           onDelete={handleDelete}
           onRename={handleRename}
           onPinToggle={handlePinToggle}
+          onShare={(id) => setShareConvId(id)}
           onOpenPalette={() => setPaletteOpen(true)}
           onOpenPersonaModal={() => setPersonaModalOpen(true)}
         />
@@ -185,6 +188,7 @@ export function ChatShell({
                 onDelete={handleDelete}
                 onRename={handleRename}
                 onPinToggle={handlePinToggle}
+                onShare={(id) => setShareConvId(id)}
                 onOpenPalette={() => setPaletteOpen(true)}
                 onOpenPersonaModal={() => setPersonaModalOpen(true)}
                 onClose={() => setSidebarOpen(false)}
@@ -231,6 +235,13 @@ export function ChatShell({
         onDeleted={(id) => {
           setCustomPersonas((s) => s.filter((p) => p.id !== id));
         }}
+      />
+
+      <ShareModal
+        open={shareConvId !== null}
+        onClose={() => setShareConvId(null)}
+        conversationId={shareConvId}
+        conversationTitle={conversations.find((c) => c.id === shareConvId)?.title}
       />
     </div>
   );
