@@ -40,6 +40,21 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     setStreaming(false);
   }
 
+  // Pull authoritative messages from the server so client IDs/timestamps match the DB.
+  // Critical for delete/regenerate/edit — they reference real DB rows.
+  async function refreshMessages() {
+    try {
+      const res = await fetch(`/api/conversations/${conversation.id}/messages`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) return;
+      const { messages: real } = await res.json();
+      setMessages(real);
+    } catch {
+      // ignore
+    }
+  }
+
   async function streamChat(content: string, attachments: Attachment[]) {
     const ac = new AbortController();
     abortRef.current = ac;
@@ -100,6 +115,10 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         return next;
       });
       toast({ title: 'Message failed', description: e.message, variant: 'error' });
+    } finally {
+      // Sync local state with the database — replaces optimistic `temp-*` IDs
+      // with real ones so subsequent delete/regenerate/edit work after a refresh.
+      await refreshMessages();
     }
   }
 
@@ -125,9 +144,22 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     setStreaming(false);
   }
 
+  // Build the truncate request body — prefer messageId for real DB rows.
+  function truncateBody(msg: Message) {
+    if (msg.id && !msg.id.startsWith('temp-')) {
+      return {
+        conversationId: conversation.id,
+        messageId: msg.id,
+      };
+    }
+    return {
+      conversationId: conversation.id,
+      fromCreatedAt: msg.created_at,
+    };
+  }
+
   async function regenerateAt(index: number) {
     if (streaming) return;
-    // Find the user message right before this assistant message
     const userIdx = index - 1;
     const userMsg = messages[userIdx];
     if (!userMsg || userMsg.role !== 'user') {
@@ -137,17 +169,12 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     const assistantMsg = messages[index];
     if (!assistantMsg) return;
 
-    // Tell the server to delete from this assistant message onward
     await fetch('/api/messages/truncate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: conversation.id,
-        fromCreatedAt: assistantMsg.created_at,
-      }),
+      body: JSON.stringify(truncateBody(assistantMsg)),
     });
 
-    // Optimistically replace messages from that point
     const placeholder: Message = {
       id: `temp-a-${Date.now()}`,
       conversation_id: conversation.id,
@@ -167,14 +194,10 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     const target = messages[index];
     if (!target || target.role !== 'user') return;
 
-    // Server: truncate from this user message onward
     await fetch('/api/messages/truncate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: conversation.id,
-        fromCreatedAt: target.created_at,
-      }),
+      body: JSON.stringify(truncateBody(target)),
     });
 
     const userMsg: Message = {
@@ -203,15 +226,18 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     if (streaming) return;
     const target = messages[index];
     if (!target) return;
-    await fetch('/api/messages/truncate', {
+    const res = await fetch('/api/messages/truncate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: conversation.id,
-        fromCreatedAt: target.created_at,
-      }),
+      body: JSON.stringify(truncateBody(target)),
     });
+    if (!res.ok) {
+      toast({ title: 'Delete failed', variant: 'error' });
+      return;
+    }
     setMessages((m) => m.slice(0, index));
+    // Re-sync to make sure the server actually deleted what we expected.
+    await refreshMessages();
   }
 
   async function generateImage(prompt: string) {

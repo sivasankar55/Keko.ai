@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { genAI, CHAT_MODEL, type HistoryItem } from '@/lib/ai';
+import { genAI, CHAT_MODEL, FALLBACK_MODELS, type HistoryItem } from '@/lib/ai';
 import { chatRequestSchema } from '@/lib/validation';
 import { limitChat } from '@/lib/rate-limit';
 import { getPersona } from '@/lib/personas';
@@ -121,12 +121,13 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Persist the user message
+  // Persist the user message (use a placeholder if message is empty so DB is happy and UI renders)
+  const persistedContent = message.trim().length > 0 ? message : '(attachment)';
   const { error: insertErr } = await supabase.from('messages').insert({
     conversation_id: conversationId,
     user_id: user.id,
     role: 'user',
-    content: message,
+    content: persistedContent,
     attachments: storedAttachments.length ? storedAttachments : null,
   });
   if (insertErr) {
@@ -141,64 +142,100 @@ export async function POST(request: NextRequest) {
       parts: [{ text: m.content }],
     }));
 
-  const model = genAI.getGenerativeModel({
-    model: CHAT_MODEL,
-    systemInstruction: persona.systemPrompt,
-    safetySettings: [],
-    generationConfig: {
-      temperature: 0.85,
-      topP: 0.95,
-      maxOutputTokens: 2048,
-    },
-  });
+  function buildChat(modelName: string) {
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      systemInstruction: persona.systemPrompt,
+      safetySettings: [],
+      generationConfig: {
+        temperature: 0.85,
+        topP: 0.95,
+        maxOutputTokens: 2048,
+      },
+    });
+    return model.startChat({ history });
+  }
 
-  const chat = model.startChat({ history });
+  // If user sent only attachments (no text), give Gemini a default prompt so it does something useful.
+  const promptText =
+    message.trim().length > 0
+      ? message
+      : 'Describe and analyze the attached file(s) in detail.';
+  const userParts: Part[] = [{ text: promptText }, ...attachmentParts];
 
-  const userParts: Part[] = [{ text: message }, ...attachmentParts];
-
-  // Stream the response
+  // Stream the response, with fallback models if the primary is overloaded
   const encoder = new TextEncoder();
   let fullText = '';
+  const modelChain = [CHAT_MODEL, ...FALLBACK_MODELS];
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      try {
-        const result = await chat.sendMessageStream(userParts);
-        for await (const chunk of result.stream) {
-          const piece = chunk.text();
-          if (piece) {
-            fullText += piece;
-            controller.enqueue(encoder.encode(piece));
-          }
-        }
-      } catch (e: any) {
-        const errMsg = `\n\n⚠️ ${e?.message ?? 'Generation failed.'}`;
-        fullText += errMsg;
-        controller.enqueue(encoder.encode(errMsg));
-      } finally {
-        // Persist assistant message
-        try {
-          await supabase.from('messages').insert({
-            conversation_id: conversationId,
-            user_id: user.id,
-            role: 'assistant',
-            content: fullText || '(no response)',
-          });
+      let lastError: any = null;
+      let succeeded = false;
 
-          // Auto-title the first exchange
-          if ((prior?.length ?? 0) === 0 && conv.title.startsWith('New chat')) {
-            const newTitle = generateTitle(message);
-            await supabase
-              .from('conversations')
-              .update({ title: newTitle })
-              .eq('id', conversationId)
-              .eq('user_id', user.id);
+      for (const modelName of modelChain) {
+        try {
+          const chat = buildChat(modelName);
+          const result = await chat.sendMessageStream(userParts);
+          for await (const chunk of result.stream) {
+            const piece = chunk.text();
+            if (piece) {
+              fullText += piece;
+              controller.enqueue(encoder.encode(piece));
+            }
           }
-        } catch {
-          // already streamed; swallow
+          succeeded = true;
+          break;
+        } catch (e: any) {
+          lastError = e;
+          const msg = String(e?.message ?? '');
+          // Only retry for transient overload / unavailable errors.
+          // Other errors (auth, quota, content) — bail immediately.
+          const isTransient =
+            msg.includes('503') ||
+            msg.toLowerCase().includes('overloaded') ||
+            msg.toLowerCase().includes('unavailable') ||
+            msg.includes('500');
+          if (!isTransient) break;
+          // If we already streamed partial output, don't retry — the user sees garbled output.
+          if (fullText.length > 0) break;
+          // eslint-disable-next-line no-console
+          console.warn(`[chat] ${modelName} transient error, falling back...`, msg);
         }
-        controller.close();
       }
+
+      if (!succeeded && lastError) {
+        const friendly =
+          String(lastError.message ?? '').includes('503') ||
+          String(lastError.message ?? '').toLowerCase().includes('overloaded')
+            ? "Gemini is overloaded right now. I tried a backup model but couldn't reach it either. Please try again in a minute."
+            : `Generation failed. ${lastError.message ?? ''}`;
+        fullText += (fullText ? '\n\n' : '') + '⚠️ ' + friendly;
+        controller.enqueue(encoder.encode('⚠️ ' + friendly));
+      }
+
+      // Persist assistant message + auto-title
+      try {
+        await supabase.from('messages').insert({
+          conversation_id: conversationId,
+          user_id: user.id,
+          role: 'assistant',
+          content: fullText || '(no response)',
+        });
+
+        // Auto-title the first exchange
+        if ((prior?.length ?? 0) === 0 && conv.title.startsWith('New chat')) {
+          const newTitle = generateTitle(message);
+          await supabase
+            .from('conversations')
+            .update({ title: newTitle })
+            .eq('id', conversationId)
+            .eq('user_id', user.id);
+        }
+      } catch {
+        // already streamed; swallow
+      }
+      controller.close();
     },
   });
 

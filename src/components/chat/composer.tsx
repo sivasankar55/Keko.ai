@@ -37,9 +37,15 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
     const trimmed = text.trim();
-    if (!trimmed || disabled) return;
-    if (imageMode) onGenerateImage(trimmed);
-    else onSend(trimmed, attachments);
+    if (disabled) return;
+    // Image mode requires text (the prompt). Otherwise text or attachments is enough.
+    if (imageMode) {
+      if (!trimmed) return;
+      onGenerateImage(trimmed);
+    } else {
+      if (!trimmed && attachments.length === 0) return;
+      onSend(trimmed, attachments);
+    }
     setText('');
     setAttachments([]);
     setImageMode(false);
@@ -52,53 +58,101 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
   }
 
-  async function handleFiles(files: FileList) {
+  async function handleFiles(files: File[]) {
+    // eslint-disable-next-line no-console
+    console.log('[handleFiles] called with', files.length, 'files. existing attachments:', attachments.length);
+
+    if (attachments.length >= 4) {
+      toast({ title: 'Up to 4 attachments per message', variant: 'error' });
+      return;
+    }
+
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
+      // eslint-disable-next-line no-console
+      console.log('[handleFiles] no user');
       toast({ title: 'Please sign in again', variant: 'error' });
       return;
     }
+
     setUploading(true);
     const newAttachments: Attachment[] = [];
+    const remainingSlots = Math.max(0, 4 - attachments.length);
+    const fileList = files.slice(0, remainingSlots);
+    // eslint-disable-next-line no-console
+    console.log('[handleFiles] will process', fileList.length, 'of', files.length, 'files');
 
-    for (const file of Array.from(files).slice(0, 4 - attachments.length)) {
-      if (!ALLOWED_MIME.includes(file.type)) {
-        toast({ title: 'File type not allowed', description: file.name, variant: 'error' });
+    for (const file of fileList) {
+      // eslint-disable-next-line no-console
+      console.log('[handleFiles] processing', file.name, '|type:', file.type, '|size:', file.size);
+      // Some browsers (or HEIC, etc.) report empty MIME — fall back to extension
+      const inferredType =
+        file.type ||
+        (() => {
+          const e = file.name.split('.').pop()?.toLowerCase() ?? '';
+          if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+          if (e === 'png') return 'image/png';
+          if (e === 'webp') return 'image/webp';
+          if (e === 'gif') return 'image/gif';
+          if (e === 'pdf') return 'application/pdf';
+          if (e === 'txt') return 'text/plain';
+          if (e === 'md') return 'text/markdown';
+          return '';
+        })();
+
+      if (!ALLOWED_MIME.includes(inferredType)) {
+        toast({
+          title: 'File type not allowed',
+          description: `${file.name} (${file.type || 'unknown type'})`,
+          variant: 'error',
+        });
         continue;
       }
       if (file.size > MAX_FILE_BYTES) {
-        toast({ title: 'File too large', description: 'Max 8MB', variant: 'error' });
+        toast({ title: 'File too large', description: `${file.name} is over 8MB`, variant: 'error' });
         continue;
       }
       const ext = file.name.split('.').pop()?.toLowerCase() ?? 'bin';
       const id = crypto.randomUUID();
       const path = `${user.id}/${conversationId}/${id}.${ext}`;
       const { error } = await supabase.storage.from('attachments').upload(path, file, {
-        contentType: file.type,
+        contentType: inferredType,
         upsert: false,
       });
       if (error) {
-        toast({ title: 'Upload failed', description: error.message, variant: 'error' });
+        // eslint-disable-next-line no-console
+        console.error('[upload]', error);
+        toast({
+          title: 'Upload failed',
+          description: error.message + ' — check that the "attachments" bucket exists and RLS policies are set.',
+          variant: 'error',
+        });
         continue;
       }
-      const { data: signed } = await supabase.storage
+      const { data: signed, error: signErr } = await supabase.storage
         .from('attachments')
         .createSignedUrl(path, 3600);
+      if (signErr) {
+        // eslint-disable-next-line no-console
+        console.error('[sign]', signErr);
+      }
       newAttachments.push({
         id,
         name: file.name,
-        type: file.type,
+        type: inferredType,
         size: file.size,
         path,
         url: signed?.signedUrl,
-        kind: file.type.startsWith('image') ? 'image' : 'document',
+        kind: inferredType.startsWith('image') ? 'image' : 'document',
       });
     }
     setAttachments((a) => [...a, ...newAttachments]);
     setUploading(false);
+    // eslint-disable-next-line no-console
+    console.log('[handleFiles] done. added', newAttachments.length);
   }
 
   function toggleVoice() {
@@ -133,7 +187,8 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
     setRecording(true);
   }
 
-  const canSend = text.trim().length > 0 && !disabled;
+  const canSend =
+    !disabled && (imageMode ? text.trim().length > 0 : text.trim().length > 0 || attachments.length > 0);
 
   return (
     <div className="px-6 lg:px-8 pb-6 pt-2">
@@ -161,7 +216,7 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
             </motion.div>
           )}
 
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || uploading) && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
@@ -192,8 +247,9 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
                 </div>
               ))}
               {uploading && (
-                <div className="h-12 w-12 grid place-items-center rounded-md border border-hairline bg-muted">
-                  <Loader2 className="h-3 w-3 animate-spin text-faint" />
+                <div className="h-12 px-3 flex items-center gap-2 rounded-md border border-hairline bg-muted text-[11.5px] text-subtle">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Uploading…
                 </div>
               )}
             </motion.div>
@@ -267,8 +323,18 @@ export function Composer({ conversationId, onSend, onGenerateImage, disabled }: 
           multiple
           className="hidden"
           onChange={(e) => {
-            if (e.target.files) handleFiles(e.target.files);
+            const f = e.target.files;
+            // Snapshot the FileList into a real array BEFORE clearing the input,
+            // because FileList is a live reference and becomes empty when value=''.
+            const snapshot = f ? Array.from(f) : [];
             e.target.value = '';
+            // eslint-disable-next-line no-console
+            console.log('[file input onChange] snapshot length:', snapshot.length);
+            if (snapshot.length > 0) {
+              handleFiles(snapshot);
+            } else {
+              toast({ title: 'No files selected', variant: 'error' });
+            }
           }}
         />
       </form>

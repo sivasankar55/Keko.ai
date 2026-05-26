@@ -17,21 +17,26 @@ export const messageSchema = z.object({
   content: z.string().min(1).max(MAX_MESSAGE_CHARS),
 });
 
-export const chatRequestSchema = z.object({
-  conversationId: z.string().uuid(),
-  message: z.string().min(1).max(MAX_MESSAGE_CHARS),
-  attachments: z
-    .array(
-      z.object({
-        path: z.string().min(1).max(512),
-        name: z.string().min(1).max(256),
-        type: z.string().min(1).max(128),
-        size: z.number().int().positive().max(MAX_FILE_BYTES),
-      }),
-    )
-    .max(4)
-    .optional(),
-});
+export const chatRequestSchema = z
+  .object({
+    conversationId: z.string().uuid(),
+    message: z.string().max(MAX_MESSAGE_CHARS).default(''),
+    attachments: z
+      .array(
+        z.object({
+          path: z.string().min(1).max(512),
+          name: z.string().min(1).max(256),
+          type: z.string().min(1).max(128),
+          size: z.number().int().positive().max(MAX_FILE_BYTES),
+        }),
+      )
+      .max(4)
+      .optional(),
+  })
+  .refine(
+    (v) => v.message.trim().length > 0 || (v.attachments && v.attachments.length > 0),
+    { message: 'Provide a message or at least one attachment.' },
+  );
 
 export const createConversationSchema = z.object({
   personaId: z.string().min(1).max(64),

@@ -2,13 +2,16 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
 
-const schema = z.object({
-  conversationId: z.string().uuid(),
-  // Delete all messages with created_at >= this timestamp.
-  // Used for regenerate (truncate from assistant message inclusive)
-  // and edit (truncate from edited user message inclusive, then resend).
-  fromCreatedAt: z.string().datetime(),
-});
+const schema = z
+  .object({
+    conversationId: z.string().uuid(),
+    // Either messageId (preferred) or fromCreatedAt (fallback)
+    messageId: z.string().uuid().optional(),
+    fromCreatedAt: z.string().datetime().optional(),
+  })
+  .refine((v) => v.messageId || v.fromCreatedAt, {
+    message: 'Provide messageId or fromCreatedAt',
+  });
 
 export async function POST(request: NextRequest) {
   const supabase = createClient();
@@ -28,7 +31,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'invalid input' }, { status: 400 });
   }
 
-  // Verify ownership
   const { data: conv } = await supabase
     .from('conversations')
     .select('id')
@@ -37,13 +39,33 @@ export async function POST(request: NextRequest) {
     .single();
   if (!conv) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
-  const { error } = await supabase
+  // Resolve a real created_at from messageId if provided.
+  let fromCreatedAt = parsed.data.fromCreatedAt;
+  if (parsed.data.messageId) {
+    const { data: msg } = await supabase
+      .from('messages')
+      .select('created_at')
+      .eq('id', parsed.data.messageId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!msg) {
+      // Already gone (or temp-only) — nothing to delete server-side.
+      return NextResponse.json({ ok: true, deleted: 0 });
+    }
+    fromCreatedAt = msg.created_at;
+  }
+
+  if (!fromCreatedAt) {
+    return NextResponse.json({ error: 'invalid input' }, { status: 400 });
+  }
+
+  const { error, count } = await supabase
     .from('messages')
-    .delete()
+    .delete({ count: 'exact' })
     .eq('conversation_id', parsed.data.conversationId)
     .eq('user_id', user.id)
-    .gte('created_at', parsed.data.fromCreatedAt);
+    .gte('created_at', fromCreatedAt);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, deleted: count ?? 0 });
 }
