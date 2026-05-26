@@ -239,13 +239,16 @@ export async function POST(request: NextRequest) {
         } catch (e: any) {
           lastError = e;
           const msg = String(e?.message ?? '');
-          // Only retry for transient overload / unavailable errors.
-          // Other errors (auth, quota, content) — bail immediately.
+          // Retry on transient errors (503/500) and on quota exhaustion (429),
+          // since each model has its own quota bucket on the free tier.
           const isTransient =
             msg.includes('503') ||
             msg.toLowerCase().includes('overloaded') ||
             msg.toLowerCase().includes('unavailable') ||
-            msg.includes('500');
+            msg.includes('500') ||
+            msg.includes('429') ||
+            msg.toLowerCase().includes('quota') ||
+            msg.toLowerCase().includes('rate limit');
           if (!isTransient) break;
           // If we already streamed partial output, don't retry — the user sees garbled output.
           if (fullText.length > 0) break;
@@ -255,10 +258,17 @@ export async function POST(request: NextRequest) {
       }
 
       if (!succeeded && lastError) {
-        const friendly =
-          String(lastError.message ?? '').includes('503') ||
-          String(lastError.message ?? '').toLowerCase().includes('overloaded')
-            ? "Gemini is overloaded right now. I tried a backup model but couldn't reach it either. Please try again in a minute."
+        const lastMsg = String(lastError.message ?? '');
+        const isQuota =
+          lastMsg.includes('429') ||
+          lastMsg.toLowerCase().includes('quota') ||
+          lastMsg.toLowerCase().includes('rate limit');
+        const isOverload =
+          lastMsg.includes('503') || lastMsg.toLowerCase().includes('overloaded');
+        const friendly = isQuota
+          ? "I've hit Gemini's free daily limit on every model I tried. It resets in 24 hours, or you can grab a fresh API key in AI Studio (free, takes a minute) and paste it as GOOGLE_GENERATIVE_AI_API_KEY in your environment."
+          : isOverload
+            ? "Gemini is overloaded right now. I tried backup models but couldn't reach them either. Please try again in a minute."
             : `Generation failed. ${lastError.message ?? ''}`;
         fullText += (fullText ? '\n\n' : '') + '⚠️ ' + friendly;
         controller.enqueue(encoder.encode('⚠️ ' + friendly));
