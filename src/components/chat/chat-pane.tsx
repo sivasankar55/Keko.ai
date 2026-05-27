@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Square, Upload, ChevronDown, BookOpen } from 'lucide-react';
 import { MessageBubble } from './message-bubble';
 import { Composer } from './composer';
 import { DocumentsModal } from '@/components/documents-modal';
+import { ModelPicker } from '@/components/model-picker';
 import { getPersona } from '@/lib/personas';
 import { toast } from '@/components/ui/toaster';
 import { useFileUpload } from '@/lib/use-file-upload';
@@ -20,6 +22,7 @@ interface Props {
 }
 
 export function ChatPane({ conversation, initialMessages, user, customPersonas }: Props) {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -415,21 +418,35 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         <div className="max-w-3xl mx-auto flex items-baseline gap-3">
           <span className="text-[14px] opacity-60">{persona.emoji}</span>
           <p className="text-[14px] text-fg truncate">{conversation.title}</p>
-          <button
-            onClick={() => setDocsOpen(true)}
-            className="ml-auto text-[11.5px] text-faint hover:text-fg transition flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted"
-            title="Documents"
-          >
-            <BookOpen className="h-3.5 w-3.5" />
-            {docCount > 0 ? (
-              <span>{docCount} doc{docCount === 1 ? '' : 's'}</span>
-            ) : (
-              <span className="hidden sm:inline">Docs</span>
-            )}
-          </button>
-          <p className="text-[12px] text-faint truncate">
-            {persona.name}{persona.custom ? ' · custom' : ''}
-          </p>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => setDocsOpen(true)}
+              className="text-[11.5px] text-faint hover:text-fg transition flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted"
+              title="Documents"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              {docCount > 0 ? (
+                <span>{docCount} doc{docCount === 1 ? '' : 's'}</span>
+              ) : (
+                <span className="hidden sm:inline">Docs</span>
+              )}
+            </button>
+            <ModelPicker
+              currentModelId={conversation.model_id ?? null}
+              onChange={async (id) => {
+                await fetch(`/api/conversations/${conversation.id}`, {
+                  method: 'PATCH',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ modelId: id }),
+                });
+                // Soft refresh — local UI just shows the new model name on next render.
+                router.refresh();
+              }}
+            />
+            <p className="text-[12px] text-faint truncate ml-1">
+              {persona.name}{persona.custom ? ' · custom' : ''}
+            </p>
+          </div>
         </div>
       </header>
 

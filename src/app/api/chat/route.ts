@@ -5,6 +5,8 @@ import { chatRequestSchema } from '@/lib/validation';
 import { limitChat } from '@/lib/rate-limit';
 import { getPersona } from '@/lib/personas';
 import { embed } from '@/lib/embeddings';
+import { getModel } from '@/lib/models';
+import { streamGroqChat, type GroqMessage } from '@/lib/groq';
 import type { Part } from '@google/generative-ai';
 
 export const runtime = 'nodejs';
@@ -41,7 +43,7 @@ export async function POST(request: NextRequest) {
   // Verify conversation ownership (RLS also enforces, but we want a clear early return)
   const { data: conv, error: convErr } = await supabase
     .from('conversations')
-    .select('id, persona_id, title, user_id')
+    .select('id, persona_id, title, user_id, model_id')
     .eq('id', conversationId)
     .eq('user_id', user.id)
     .single();
@@ -213,47 +215,83 @@ export async function POST(request: NextRequest) {
   const userParts: Part[] = [{ text: finalPromptText }, ...attachmentParts];
   void ragSources;
 
-  // Stream the response, with fallback models if the primary is overloaded
+  // Stream the response — provider-aware.
+  // If user picked a Groq model on this conversation, route there.
+  // Otherwise use Gemini with the legacy fallback chain.
   const encoder = new TextEncoder();
   let fullText = '';
-  const modelChain = [CHAT_MODEL, ...FALLBACK_MODELS];
+
+  const selectedModel = conv.model_id ? getModel(conv.model_id) : null;
+  const useGroq = selectedModel?.provider === 'groq';
+
+  // Build the model chain. For Gemini, try the chosen model then fallbacks.
+  // For Groq, just the chosen model (Groq is reliable enough not to need fallbacks).
+  const geminiChain = selectedModel?.provider === 'gemini'
+    ? [selectedModel.remoteModel, ...FALLBACK_MODELS.filter((m) => m !== selectedModel.remoteModel)]
+    : [CHAT_MODEL, ...FALLBACK_MODELS];
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let lastError: any = null;
       let succeeded = false;
 
-      for (const modelName of modelChain) {
+      if (useGroq && selectedModel) {
+        // Groq path
         try {
-          const chat = buildChat(modelName);
-          const result = await chat.sendMessageStream(userParts);
-          for await (const chunk of result.stream) {
-            const piece = chunk.text();
-            if (piece) {
-              fullText += piece;
-              controller.enqueue(encoder.encode(piece));
-            }
+          const groqMessages: GroqMessage[] = [
+            { role: 'system', content: persona.systemPrompt },
+            ...(prior ?? [])
+              .filter((m) => m.role === 'user' || m.role === 'assistant')
+              .map((m) => ({
+                role: m.role as 'user' | 'assistant',
+                content: m.content,
+              })),
+            { role: 'user', content: finalPromptText },
+          ];
+          for await (const piece of streamGroqChat({
+            model: selectedModel.remoteModel,
+            messages: groqMessages,
+          })) {
+            fullText += piece;
+            controller.enqueue(encoder.encode(piece));
           }
           succeeded = true;
-          break;
         } catch (e: any) {
           lastError = e;
-          const msg = String(e?.message ?? '');
-          // Retry on transient errors (503/500) and on quota exhaustion (429),
-          // since each model has its own quota bucket on the free tier.
-          const isTransient =
-            msg.includes('503') ||
-            msg.toLowerCase().includes('overloaded') ||
-            msg.toLowerCase().includes('unavailable') ||
-            msg.includes('500') ||
-            msg.includes('429') ||
-            msg.toLowerCase().includes('quota') ||
-            msg.toLowerCase().includes('rate limit');
-          if (!isTransient) break;
-          // If we already streamed partial output, don't retry — the user sees garbled output.
-          if (fullText.length > 0) break;
           // eslint-disable-next-line no-console
-          console.warn(`[chat] ${modelName} transient error, falling back...`, msg);
+          console.warn('[chat] groq failed:', e?.message);
+        }
+      } else {
+        // Gemini path with fallback chain
+        for (const modelName of geminiChain) {
+          try {
+            const chat = buildChat(modelName);
+            const result = await chat.sendMessageStream(userParts);
+            for await (const chunk of result.stream) {
+              const piece = chunk.text();
+              if (piece) {
+                fullText += piece;
+                controller.enqueue(encoder.encode(piece));
+              }
+            }
+            succeeded = true;
+            break;
+          } catch (e: any) {
+            lastError = e;
+            const msg = String(e?.message ?? '');
+            const isTransient =
+              msg.includes('503') ||
+              msg.toLowerCase().includes('overloaded') ||
+              msg.toLowerCase().includes('unavailable') ||
+              msg.includes('500') ||
+              msg.includes('429') ||
+              msg.toLowerCase().includes('quota') ||
+              msg.toLowerCase().includes('rate limit');
+            if (!isTransient) break;
+            if (fullText.length > 0) break;
+            // eslint-disable-next-line no-console
+            console.warn(`[chat] ${modelName} transient error, falling back...`, msg);
+          }
         }
       }
 

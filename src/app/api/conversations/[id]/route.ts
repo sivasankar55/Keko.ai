@@ -7,6 +7,7 @@ const idSchema = z.string().uuid();
 const patchSchema = z.object({
   title: z.string().min(1).max(120).optional(),
   pinned: z.boolean().optional(),
+  modelId: z.string().min(1).max(64).nullable().optional(),
 });
 
 export async function PATCH(
@@ -39,6 +40,7 @@ export async function PATCH(
   if (parsed.data.pinned !== undefined) {
     update.pinned_at = parsed.data.pinned ? new Date().toISOString() : null;
   }
+  if (parsed.data.modelId !== undefined) update.model_id = parsed.data.modelId;
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 });
   }
