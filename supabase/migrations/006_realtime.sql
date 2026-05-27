@@ -1,5 +1,7 @@
 -- =========================================================
 -- keko.ai - Real-time collaboration
+-- (Updated: uses a SECURITY DEFINER helper to avoid RLS
+--  infinite recursion between conversations and members.)
 -- =========================================================
 
 -- Members of a conversation. Owner is implicit via conversations.user_id.
@@ -16,21 +18,35 @@ create index if not exists conversation_members_user_idx
 
 alter table public.conversation_members enable row level security;
 
--- A user can see members of conversations they belong to (owner or member).
+-- Helper: is the given user a member of the given conversation?
+-- SECURITY DEFINER so it can read members without invoking RLS recursively.
+create or replace function public.is_conversation_member(p_conv uuid, p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.conversation_members
+    where conversation_id = p_conv and user_id = p_user
+  );
+$$;
+
+grant execute on function public.is_conversation_member(uuid, uuid) to authenticated;
+
+-- Member rows: a user sees their own member rows and member rows of conversations they own.
 drop policy if exists "members select if member" on public.conversation_members;
 create policy "members select if member"
   on public.conversation_members for select
   using (
-    exists (
-      select 1 from public.conversations c
-      where c.id = conversation_members.conversation_id
-        and (c.user_id = auth.uid() or c.id in (
-          select cm.conversation_id from public.conversation_members cm where cm.user_id = auth.uid()
-        ))
+    user_id = auth.uid()
+    or conversation_id in (
+      select id from public.conversations where user_id = auth.uid()
     )
   );
 
--- Only the conversation owner can insert/update/delete member rows.
+-- Only the owner can insert/update/delete arbitrary member rows.
 drop policy if exists "members write if owner" on public.conversation_members;
 create policy "members write if owner"
   on public.conversation_members for all
@@ -49,13 +65,13 @@ create policy "members write if owner"
     )
   );
 
--- A user can leave on their own (delete their own member row, except owner).
+-- Members can leave (delete their own row, except owner).
 drop policy if exists "members can leave" on public.conversation_members;
 create policy "members can leave"
   on public.conversation_members for delete
   using (user_id = auth.uid() and role <> 'owner');
 
--- Invite tokens — like share_links but for join, not just read.
+-- Invite tokens
 create table if not exists public.invite_links (
   token text primary key,
   conversation_id uuid not null references public.conversations(id) on delete cascade,
@@ -111,7 +127,6 @@ begin
     from public.conversations
     where id = v_invite.conversation_id;
 
-  -- Owner doesn't need to "join" themselves.
   if v_conv.user_id = auth.uid() then
     return json_build_object('conversation_id', v_conv.id);
   end if;
@@ -126,17 +141,13 @@ $$;
 
 grant execute on function public.redeem_invite(text) to authenticated;
 
--- Update conversation/message RLS so members (not just owners) can read.
--- Owners still keep their existing policies; we add member-side reads.
-
+-- Conversation/message reads: owner OR member (via helper, no recursion).
 drop policy if exists "conversations select if member" on public.conversations;
 create policy "conversations select if member"
   on public.conversations for select
   using (
     auth.uid() = user_id
-    or id in (
-      select cm.conversation_id from public.conversation_members cm where cm.user_id = auth.uid()
-    )
+    or public.is_conversation_member(id, auth.uid())
   );
 
 drop policy if exists "messages select if member" on public.messages;
@@ -144,29 +155,21 @@ create policy "messages select if member"
   on public.messages for select
   using (
     auth.uid() = user_id
-    or conversation_id in (
-      select cm.conversation_id from public.conversation_members cm where cm.user_id = auth.uid()
-    )
+    or public.is_conversation_member(conversation_id, auth.uid())
   );
 
--- Members can also INSERT messages (so they can chat too).
 drop policy if exists "messages insert if member" on public.messages;
 create policy "messages insert if member"
   on public.messages for insert
   with check (
     user_id = auth.uid()
     and (
-      -- Either the user owns this conversation,
       conversation_id in (select id from public.conversations where user_id = auth.uid())
-      -- or they are a member of it.
-      or conversation_id in (
-        select cm.conversation_id from public.conversation_members cm where cm.user_id = auth.uid()
-      )
+      or public.is_conversation_member(conversation_id, auth.uid())
     )
   );
 
--- Enable realtime publication on messages so changes broadcast to subscribers.
--- Safe if already added.
+-- Enable realtime publication on messages.
 do $$
 begin
   if not exists (
