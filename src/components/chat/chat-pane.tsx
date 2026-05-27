@@ -3,15 +3,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Square, Upload, ChevronDown, BookOpen } from 'lucide-react';
+import { Square, Upload, ChevronDown, BookOpen, Users } from 'lucide-react';
 import { MessageBubble } from './message-bubble';
 import { Composer } from './composer';
 import { DocumentsModal } from '@/components/documents-modal';
+import { InviteModal } from '@/components/invite-modal';
 import { ModelPicker } from '@/components/model-picker';
 import { getPersona } from '@/lib/personas';
 import { toast } from '@/components/ui/toaster';
 import { useFileUpload } from '@/lib/use-file-upload';
 import { sounds } from '@/lib/audio';
+import { useRealtimeChannel } from '@/lib/use-realtime';
 import type { Conversation, Message, Attachment, Persona } from '@/lib/types';
 
 interface Props {
@@ -33,7 +35,26 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   const [autoScroll, setAutoScroll] = useState(true);
   const [docsOpen, setDocsOpen] = useState(false);
   const [docCount, setDocCount] = useState(0);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const { upload } = useFileUpload(conversation.id);
+
+  // Realtime: append messages from other clients (de-dup by id), track presence.
+  const { presence } = useRealtimeChannel({
+    conversationId: conversation.id,
+    selfUserId: user.id,
+    selfDisplayName: user.displayName,
+    selfAvatarUrl: user.avatarUrl,
+    onIncomingMessage: (msg) => {
+      setMessages((m) => {
+        if (m.some((x) => x.id === msg.id)) return m;
+        // Insert in created_at order
+        const copy = [...m, msg].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        );
+        return copy;
+      });
+    },
+  });
 
   const persona = getPersona(conversation.persona_id, customPersonas);
 
@@ -445,6 +466,29 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         <div className="max-w-3xl mx-auto flex items-baseline gap-3">
           <span className="text-[14px] opacity-60">{persona.emoji}</span>
           <p className="text-[14px] text-fg truncate">{conversation.title}</p>
+          {presence.length > 1 && (
+            <div className="flex -space-x-1.5 self-center">
+              {presence.slice(0, 4).map((p) => (
+                <div
+                  key={p.user_id}
+                  title={p.display_name}
+                  className="h-5 w-5 rounded-full bg-muted border-2 border-surface grid place-items-center text-[9px] font-medium overflow-hidden"
+                >
+                  {p.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={p.avatar_url} alt="" className="h-5 w-5 object-cover" />
+                  ) : (
+                    p.display_name.charAt(0).toUpperCase()
+                  )}
+                </div>
+              ))}
+              {presence.length > 4 && (
+                <div className="h-5 px-1.5 rounded-full bg-muted border-2 border-surface grid place-items-center text-[9px] font-medium">
+                  +{presence.length - 4}
+                </div>
+              )}
+            </div>
+          )}
           {conversation.branched_from_conversation_id && (
             <button
               onClick={() => {
@@ -458,6 +502,14 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
             </button>
           )}
           <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => setInviteOpen(true)}
+              className="text-[11.5px] text-faint hover:text-fg transition flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted"
+              title="Invite"
+            >
+              <Users className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Invite</span>
+            </button>
             <button
               onClick={() => setDocsOpen(true)}
               className="text-[11.5px] text-faint hover:text-fg transition flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted"
@@ -593,6 +645,13 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         open={docsOpen}
         onClose={() => setDocsOpen(false)}
         conversationId={conversation.id}
+      />
+
+      <InviteModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        conversationId={conversation.id}
+        conversationTitle={conversation.title}
       />
     </div>
   );
