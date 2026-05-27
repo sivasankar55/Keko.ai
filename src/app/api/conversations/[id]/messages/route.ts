@@ -18,12 +18,11 @@ export async function GET(
     return NextResponse.json({ error: 'invalid id' }, { status: 400 });
   }
 
-  // Verify ownership through the conversation join
+  // Verify the user can access this conversation (owner OR member; RLS handles it).
   const { data: conv } = await supabase
     .from('conversations')
     .select('id')
     .eq('id', params.id)
-    .eq('user_id', user.id)
     .maybeSingle();
   if (!conv) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
