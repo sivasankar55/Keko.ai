@@ -9,6 +9,7 @@ import { DocumentsModal } from '@/components/documents-modal';
 import { getPersona } from '@/lib/personas';
 import { toast } from '@/components/ui/toaster';
 import { useFileUpload } from '@/lib/use-file-upload';
+import { sounds } from '@/lib/audio';
 import type { Conversation, Message, Attachment, Persona } from '@/lib/types';
 
 interface Props {
@@ -44,6 +45,19 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   useEffect(() => {
     setMessages(initialMessages);
   }, [initialMessages, conversation.id]);
+
+  // If a starter prompt was passed via URL hash (#prompt=...),
+  // pre-fill the composer.
+  const [initialPrompt, setInitialPrompt] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash;
+    if (!hash.startsWith('#prompt=')) return;
+    const decoded = decodeURIComponent(hash.slice('#prompt='.length));
+    setInitialPrompt(decoded);
+    // Clean the hash so it doesn't reapply on refresh.
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [conversation.id]);
 
   useEffect(() => {
     if (!autoScroll) return;
@@ -152,10 +166,15 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let acc = '';
+      let firstChunk = true;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
+        if (firstChunk && acc.trim().length > 0) {
+          firstChunk = false;
+          sounds.receive();
+        }
         setMessages((m) => {
           const next = [...m];
           next[next.length - 1] = { ...next[next.length - 1], content: acc };
@@ -193,6 +212,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   }
 
   async function sendMessage(content: string, attachments: Attachment[]) {
+    sounds.send();
     const userMsg: Message = {
       id: `temp-u-${Date.now()}`,
       conversation_id: conversation.id,
@@ -505,6 +525,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         disabled={streaming}
         externalAttachments={pendingDrop}
         onConsumeExternal={() => setPendingDrop(undefined)}
+        initialText={initialPrompt}
       />
 
       <DocumentsModal

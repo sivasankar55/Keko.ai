@@ -6,10 +6,21 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeHighlight from 'rehype-highlight';
-import { FileText, ImageIcon, Copy, RefreshCw, Pencil, Check, Trash2 } from 'lucide-react';
+import {
+  FileText,
+  ImageIcon,
+  Copy,
+  RefreshCw,
+  Pencil,
+  Check,
+  Trash2,
+  Volume2,
+  Square as Stop,
+} from 'lucide-react';
 import type { Message } from '@/lib/types';
 import { cn, formatTime } from '@/lib/utils';
 import { CodeBlock } from './code-block';
+import { useTTS } from '@/lib/use-tts';
 
 // Allow class on code/pre/span so syntax highlighting can apply colors.
 const sanitizeSchema = {
@@ -47,6 +58,8 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editVal, setEditVal] = useState(message.content);
+  const tts = useTTS();
+  const isThisSpeaking = tts.speaking;
 
   function copy() {
     navigator.clipboard.writeText(message.content);
@@ -172,6 +185,15 @@ export function MessageBubble({
           <ActionBtn label={copied ? 'Copied' : 'Copy'} onClick={copy}>
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           </ActionBtn>
+          {!isUser && tts.supported && (
+            <ActionBtn
+              label={isThisSpeaking ? 'Stop' : 'Listen'}
+              onClick={() => (isThisSpeaking ? tts.stop() : tts.speak(message.content))}
+              active={isThisSpeaking}
+            >
+              {isThisSpeaking ? <Stop className="h-3 w-3 fill-current" /> : <Volume2 className="h-3 w-3" />}
+            </ActionBtn>
+          )}
           {!isUser && onRegenerate && (
             <ActionBtn label="Regenerate" onClick={onRegenerate}>
               <RefreshCw className="h-3 w-3" />
@@ -200,11 +222,13 @@ function ActionBtn({
   label,
   onClick,
   danger,
+  active,
 }: {
   children: React.ReactNode;
   label: string;
   onClick: () => void;
   danger?: boolean;
+  active?: boolean;
 }) {
   return (
     <button
@@ -214,9 +238,10 @@ function ActionBtn({
       onClick={onClick}
       className={cn(
         'h-7 px-2 rounded text-[11px] flex items-center gap-1.5 transition',
+        active && 'bg-muted text-fg',
         danger
           ? 'text-faint hover:text-danger hover:bg-danger/10'
-          : 'text-faint hover:text-fg hover:bg-muted',
+          : !active && 'text-faint hover:text-fg hover:bg-muted',
       )}
     >
       {children}

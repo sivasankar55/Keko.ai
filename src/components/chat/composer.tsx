@@ -22,9 +22,9 @@ interface Props {
   onSend: (content: string, attachments: Attachment[]) => void;
   onGenerateImage: (prompt: string) => void;
   disabled: boolean;
-  // Optional: parent can inject attachments dropped on chat area
   externalAttachments?: Attachment[];
   onConsumeExternal?: () => void;
+  initialText?: string;
 }
 
 export function Composer({
@@ -34,6 +34,7 @@ export function Composer({
   disabled,
   externalAttachments,
   onConsumeExternal,
+  initialText,
 }: Props) {
   const [text, setText] = useState('');
   const [imageMode, setImageMode] = useState(false);
@@ -51,6 +52,24 @@ export function Composer({
       onConsumeExternal?.();
     }
   }, [externalAttachments, onConsumeExternal]);
+
+  // Apply an initial text prefill (e.g. starter prompts)
+  useEffect(() => {
+    if (initialText) {
+      setText(initialText);
+      // Resize textarea to fit pre-filled content
+      requestAnimationFrame(() => {
+        if (taRef.current) {
+          taRef.current.style.height = 'auto';
+          taRef.current.style.height = Math.min(taRef.current.scrollHeight, 200) + 'px';
+          taRef.current.focus();
+          taRef.current.setSelectionRange(initialText.length, initialText.length);
+        }
+      });
+    }
+    // Only run when initialText itself changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialText]);
 
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();

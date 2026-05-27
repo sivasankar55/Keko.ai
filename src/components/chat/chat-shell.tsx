@@ -12,6 +12,7 @@ import { PersonaModal } from '@/components/persona-modal';
 import { ShareModal } from '@/components/share-modal';
 import type { Conversation, Message, Persona } from '@/lib/types';
 import { PERSONAS } from '@/lib/personas';
+import { downloadConversationAsMarkdown } from '@/lib/export';
 import { toast } from '@/components/ui/toaster';
 
 interface Props {
@@ -68,7 +69,7 @@ export function ChatShell({
   const active = conversations.find((c) => c.id === activeConversationId) ?? null;
 
   const handleNewConversation = useCallback(
-    async (personaId: string) => {
+    async (personaId: string, opts?: { initialPrompt?: string }) => {
       const res = await fetch('/api/conversations', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -80,7 +81,11 @@ export function ChatShell({
       }
       const { conversation } = await res.json();
       setConversations((c) => [conversation, ...c]);
-      router.push(`/?c=${conversation.id}`);
+      // If we have an initial prompt, attach it to URL via hash so chat-pane can pick it up.
+      const url = opts?.initialPrompt
+        ? `/?c=${conversation.id}#prompt=${encodeURIComponent(opts.initialPrompt)}`
+        : `/?c=${conversation.id}`;
+      router.push(url);
       router.refresh();
       setSidebarOpen(false);
     },
@@ -136,6 +141,20 @@ export function ChatShell({
     );
   }
 
+  async function handleExport(id: string) {
+    const conv = conversations.find((c) => c.id === id);
+    if (!conv) return;
+    try {
+      const res = await fetch(`/api/conversations/${id}/messages`, { cache: 'no-store' });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? 'Failed');
+      downloadConversationAsMarkdown(conv, j.messages ?? [], customPersonas);
+      toast({ title: 'Downloaded', variant: 'success' });
+    } catch (e: any) {
+      toast({ title: 'Export failed', description: e.message, variant: 'error' });
+    }
+  }
+
   return (
     <div className="h-screen w-screen overflow-hidden flex bg-bg">
       <button
@@ -157,6 +176,7 @@ export function ChatShell({
           onRename={handleRename}
           onPinToggle={handlePinToggle}
           onShare={(id) => setShareConvId(id)}
+          onExport={handleExport}
           onOpenPalette={() => setPaletteOpen(true)}
           onOpenPersonaModal={() => setPersonaModalOpen(true)}
         />
@@ -189,6 +209,7 @@ export function ChatShell({
                 onRename={handleRename}
                 onPinToggle={handlePinToggle}
                 onShare={(id) => setShareConvId(id)}
+                onExport={handleExport}
                 onOpenPalette={() => setPaletteOpen(true)}
                 onOpenPersonaModal={() => setPersonaModalOpen(true)}
                 onClose={() => setSidebarOpen(false)}
@@ -210,6 +231,9 @@ export function ChatShell({
         ) : (
           <EmptyState
             onStart={handleNewConversation}
+            onStartWithPrompt={(personaId, prompt) =>
+              handleNewConversation(personaId, { initialPrompt: prompt })
+            }
             customPersonas={customPersonas}
             onCreatePersona={() => setPersonaModalOpen(true)}
           />

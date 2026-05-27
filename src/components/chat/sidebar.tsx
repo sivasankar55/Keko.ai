@@ -17,10 +17,14 @@ import {
   PinOff,
   Sparkles,
   Share2,
+  Download,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { cn, truncate } from '@/lib/utils';
 import { PERSONAS, getPersona } from '@/lib/personas';
+import { isSoundEnabled, setSoundEnabled } from '@/lib/audio';
 import type { Conversation, Persona } from '@/lib/types';
 
 interface Props {
@@ -33,6 +37,7 @@ interface Props {
   onRename: (id: string, title: string) => void;
   onPinToggle: (id: string, pinned: boolean) => void;
   onShare: (id: string) => void;
+  onExport: (id: string) => void;
   onOpenPalette: () => void;
   onOpenPersonaModal: () => void;
   onClose?: () => void;
@@ -48,6 +53,7 @@ export function Sidebar({
   onRename,
   onPinToggle,
   onShare,
+  onExport,
   onOpenPalette,
   onOpenPersonaModal,
   onClose,
@@ -57,7 +63,12 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVal, setEditVal] = useState('');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [soundOn, setSoundOn] = useState(true);
   const personasRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSoundOn(isSoundEnabled());
+  }, []);
 
   useEffect(() => {
     if (!showPersonas) return;
@@ -255,6 +266,15 @@ export function Sidebar({
                           </button>
                           <button
                             onClick={() => {
+                              onExport(c.id);
+                              setOpenMenu(null);
+                            }}
+                            className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
+                          >
+                            <Download className="h-3 w-3" /> Export
+                          </button>
+                          <button
+                            onClick={() => {
                               setEditingId(c.id);
                               setEditVal(c.title);
                               setOpenMenu(null);
@@ -303,6 +323,18 @@ export function Sidebar({
           title="Personas"
         >
           <Sparkles className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => {
+            const v = !soundOn;
+            setSoundOn(v);
+            setSoundEnabled(v);
+          }}
+          className="text-faint hover:text-fg transition p-1.5 rounded hover:bg-muted"
+          aria-label="Toggle sound"
+          title={soundOn ? 'Sound on' : 'Sound off'}
+        >
+          {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
         </button>
         <button
           onClick={toggle}
