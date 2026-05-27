@@ -47,7 +47,11 @@ export async function updateSession(request: NextRequest) {
 
   if (user && path === '/login') {
     const url = request.nextUrl.clone();
-    url.pathname = '/';
+    // Honor a `next` param so e.g. /login?next=/join/xyz still routes correctly
+    // for users who happen to already be logged in.
+    const next = request.nextUrl.searchParams.get('next');
+    url.pathname = next && next.startsWith('/') ? next : '/';
+    url.search = '';
     return NextResponse.redirect(url);
   }
 
