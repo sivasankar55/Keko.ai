@@ -333,6 +333,33 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     await refreshMessages();
   }
 
+  async function branchFrom(index: number) {
+    if (streaming) return;
+    const target = messages[index];
+    if (!target || target.id.startsWith('temp-')) {
+      toast({
+        title: "Can't branch yet",
+        description: 'Wait for the message to fully save first.',
+        variant: 'error',
+      });
+      return;
+    }
+    try {
+      const res = await fetch(`/api/conversations/${conversation.id}/fork`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messageId: target.id }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? 'Failed');
+      toast({ title: 'Branched', variant: 'success' });
+      router.push(`/?c=${j.conversation.id}`);
+      router.refresh();
+    } catch (e: any) {
+      toast({ title: 'Could not branch', description: e.message, variant: 'error' });
+    }
+  }
+
   async function generateImage(prompt: string) {
     const placeholder: Message = {
       id: `temp-u-${Date.now()}`,
@@ -418,6 +445,18 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         <div className="max-w-3xl mx-auto flex items-baseline gap-3">
           <span className="text-[14px] opacity-60">{persona.emoji}</span>
           <p className="text-[14px] text-fg truncate">{conversation.title}</p>
+          {conversation.branched_from_conversation_id && (
+            <button
+              onClick={() => {
+                router.push(`/?c=${conversation.branched_from_conversation_id}`);
+              }}
+              className="text-[10px] uppercase tracking-wider text-faint hover:text-fg transition flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted/60"
+              title="Open the conversation this was branched from"
+            >
+              <span>Branch</span>
+              <span aria-hidden>↗</span>
+            </button>
+          )}
           <div className="ml-auto flex items-center gap-1">
             <button
               onClick={() => setDocsOpen(true)}
@@ -496,6 +535,11 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
                   onDelete={
                     !streaming && messages.length > 1
                       ? () => deleteFrom(i)
+                      : undefined
+                  }
+                  onBranch={
+                    !streaming && !m.id.startsWith('temp-')
+                      ? () => branchFrom(i)
                       : undefined
                   }
                 />

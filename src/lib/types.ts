@@ -18,6 +18,8 @@ export interface Conversation {
   persona_id: string;
   pinned_at?: string | null;
   model_id?: string | null;
+  branched_from_conversation_id?: string | null;
+  branched_from_message_id?: string | null;
   created_at: string;
   updated_at: string;
 }
