@@ -17,6 +17,7 @@ export interface Conversation {
   title: string;
   persona_id: string;
   pinned_at?: string | null;
+  model_id?: string | null;
   created_at: string;
   updated_at: string;
 }

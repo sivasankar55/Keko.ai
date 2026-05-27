@@ -41,6 +41,7 @@ export const chatRequestSchema = z
 export const createConversationSchema = z.object({
   personaId: z.string().min(1).max(64),
   title: z.string().min(1).max(120).optional(),
+  modelId: z.string().min(1).max(64).optional(),
 });
 
 export const renameConversationSchema = z.object({

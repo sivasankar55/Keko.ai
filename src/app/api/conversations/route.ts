@@ -45,10 +45,11 @@ export async function POST(request: NextRequest) {
   }
 
   const title = parsed.data.title?.trim() || `New chat with ${personaName}`;
+  const modelId = parsed.data.modelId ?? null;
 
   const { data, error } = await supabase
     .from('conversations')
-    .insert({ user_id: user.id, title, persona_id: personaIdToStore })
+    .insert({ user_id: user.id, title, persona_id: personaIdToStore, model_id: modelId })
     .select('*')
     .single();
 
