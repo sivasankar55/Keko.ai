@@ -18,10 +18,10 @@ export default async function HomePage({
   if (!user) redirect('/login');
 
   const [convsRes, personasRes, profileRes] = await Promise.all([
+    // RLS handles ownership (owner OR member); we don't need .eq('user_id', user.id) here.
     supabase
       .from('conversations')
       .select('*')
-      .eq('user_id', user.id)
       .order('pinned_at', { ascending: false, nullsFirst: false })
       .order('updated_at', { ascending: false })
       .limit(200),

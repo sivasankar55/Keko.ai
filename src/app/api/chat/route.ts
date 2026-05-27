@@ -40,12 +40,12 @@ export async function POST(request: NextRequest) {
   }
   const { conversationId, message, attachments } = parsed.data;
 
-  // Verify conversation ownership (RLS also enforces, but we want a clear early return)
+  // Verify the user can access this conversation (owner OR member).
+  // RLS will filter automatically — we just need to check that *some* row comes back.
   const { data: conv, error: convErr } = await supabase
     .from('conversations')
     .select('id, persona_id, title, user_id, model_id')
     .eq('id', conversationId)
-    .eq('user_id', user.id)
     .single();
   if (convErr || !conv) {
     return NextResponse.json({ error: 'not found' }, { status: 404 });
