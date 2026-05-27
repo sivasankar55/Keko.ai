@@ -16,6 +16,7 @@ import {
   Trash2,
   Volume2,
   Square as Stop,
+  GitBranch,
 } from 'lucide-react';
 import type { Message } from '@/lib/types';
 import { cn, formatTime } from '@/lib/utils';
@@ -42,6 +43,7 @@ interface Props {
   onRegenerate?: () => void;
   onEdit?: (newContent: string) => void;
   onDelete?: () => void;
+  onBranch?: () => void;
 }
 
 export function MessageBubble({
@@ -53,6 +55,7 @@ export function MessageBubble({
   onRegenerate,
   onEdit,
   onDelete,
+  onBranch,
 }: Props) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
@@ -197,6 +200,11 @@ export function MessageBubble({
           {!isUser && onRegenerate && (
             <ActionBtn label="Regenerate" onClick={onRegenerate}>
               <RefreshCw className="h-3 w-3" />
+            </ActionBtn>
+          )}
+          {onBranch && (
+            <ActionBtn label="Branch" onClick={onBranch}>
+              <GitBranch className="h-3 w-3" />
             </ActionBtn>
           )}
           {isUser && onEdit && (
