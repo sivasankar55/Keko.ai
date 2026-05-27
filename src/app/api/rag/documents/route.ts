@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { chunkText, embedBatch } from '@/lib/embeddings';
-import { genAI, CHAT_MODEL } from '@/lib/ai';
+import { genAI } from '@/lib/ai';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -104,28 +104,45 @@ export async function POST(request: NextRequest) {
   try {
     let raw = '';
     if (mime === 'application/pdf') {
-      const model = genAI.getGenerativeModel({
-        model: CHAT_MODEL,
-        generationConfig: {
-          temperature: 0,
-          maxOutputTokens: 8192,
-        },
-      });
-      const result = await model.generateContent([
-        {
-          inlineData: {
-            data: buf.toString('base64'),
-            mimeType: mime,
-          },
-        },
-        {
-          text:
-            'Transcribe the entire content of this PDF as plain text. ' +
-            'Preserve paragraph breaks. Keep table contents readable. ' +
-            'Do not summarize, do not add commentary, just the text.',
-        },
-      ]);
-      raw = result.response.text() ?? '';
+      // Try transcription with progressively cheaper models until one works.
+      const transcribeChain = [
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash-lite',
+        'gemini-flash-latest',
+        'gemini-2.0-flash',
+      ];
+      let lastTranscribeErr: any = null;
+      for (const modelName of transcribeChain) {
+        try {
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            generationConfig: { temperature: 0, maxOutputTokens: 8192 },
+          });
+          const result = await model.generateContent([
+            {
+              inlineData: { data: buf.toString('base64'), mimeType: mime },
+            },
+            {
+              text:
+                'Transcribe the entire content of this PDF as plain text. ' +
+                'Preserve paragraph breaks. Keep table contents readable. ' +
+                'Do not summarize or add commentary, just the text.',
+            },
+          ]);
+          raw = result.response.text() ?? '';
+          if (raw.trim().length > 0) break;
+        } catch (e: any) {
+          lastTranscribeErr = e;
+          // Keep trying the next model.
+        }
+      }
+      if (!raw.trim()) {
+        throw new Error(
+          lastTranscribeErr?.message
+            ? `Transcription failed on all models. Last error: ${lastTranscribeErr.message}`
+            : 'No text extracted from PDF.',
+        );
+      }
     } else {
       raw = buf.toString('utf-8');
     }
