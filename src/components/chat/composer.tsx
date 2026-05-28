@@ -10,6 +10,7 @@ import {
   Sparkles,
   X,
   Loader2,
+  MessageSquareOff,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toaster';
@@ -19,12 +20,14 @@ import type { Attachment } from '@/lib/types';
 
 interface Props {
   conversationId: string;
-  onSend: (content: string, attachments: Attachment[]) => void;
+  onSend: (content: string, attachments: Attachment[], silent?: boolean) => void;
   onGenerateImage: (prompt: string) => void;
   disabled: boolean;
   externalAttachments?: Attachment[];
   onConsumeExternal?: () => void;
   initialText?: string;
+  /** When true, show a "silent" toggle so members can chat without invoking the AI. */
+  showSilentToggle?: boolean;
 }
 
 export function Composer({
@@ -35,15 +38,22 @@ export function Composer({
   externalAttachments,
   onConsumeExternal,
   initialText,
+  showSilentToggle,
 }: Props) {
   const [text, setText] = useState('');
   const [imageMode, setImageMode] = useState(false);
+  const [silentMode, setSilentMode] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [recording, setRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const { upload, uploading } = useFileUpload(conversationId);
+
+  // If silent toggle is hidden (e.g., presence dropped), reset silent mode.
+  useEffect(() => {
+    if (!showSilentToggle) setSilentMode(false);
+  }, [showSilentToggle]);
 
   // Pull in attachments dropped on the chat area (from parent)
   useEffect(() => {
@@ -81,11 +91,13 @@ export function Composer({
       onGenerateImage(trimmed);
     } else {
       if (!trimmed && attachments.length === 0) return;
-      onSend(trimmed, attachments);
+      onSend(trimmed, attachments, silentMode);
     }
     setText('');
     setAttachments([]);
     setImageMode(false);
+    // Keep silent mode sticky until user toggles it off — useful when chatting
+    // back and forth with another human.
     if (taRef.current) taRef.current.style.height = 'auto';
   }
 
@@ -156,6 +168,25 @@ export function Composer({
               <button
                 type="button"
                 onClick={() => setImageMode(false)}
+                className="ml-auto text-faint hover:text-fg transition"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </motion.div>
+          )}
+
+          {silentMode && !imageMode && (
+            <motion.div
+              initial={{ opacity: 0, y: -2 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -2 }}
+              className="flex items-center gap-2 px-1 pb-2 text-[11.5px] text-subtle"
+            >
+              <MessageSquareOff className="h-3 w-3" />
+              <span>Silent — your message goes to people in the room, not the AI</span>
+              <button
+                type="button"
+                onClick={() => setSilentMode(false)}
                 className="ml-auto text-faint hover:text-fg transition"
               >
                 <X className="h-3 w-3" />
@@ -242,6 +273,16 @@ export function Composer({
           >
             <Sparkles className="h-3.5 w-3.5" />
           </ToolBtn>
+          {showSilentToggle && (
+            <ToolBtn
+              label={silentMode ? 'Silent (peers only)' : 'Send silently to peers'}
+              onClick={() => setSilentMode((s) => !s)}
+              active={silentMode}
+              disabled={disabled || imageMode}
+            >
+              <MessageSquareOff className="h-3.5 w-3.5" />
+            </ToolBtn>
+          )}
 
           <div className="ml-auto flex items-center gap-2">
             <span className="text-[10.5px] text-faint hidden sm:inline">

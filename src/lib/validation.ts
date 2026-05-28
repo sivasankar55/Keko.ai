@@ -32,6 +32,9 @@ export const chatRequestSchema = z
       )
       .max(4)
       .optional(),
+    // When true, the message is saved but the AI does NOT reply.
+    // Used in collaboration mode for human-to-human chatter.
+    silent: z.boolean().optional(),
   })
   .refine(
     (v) => v.message.trim().length > 0 || (v.attachments && v.attachments.length > 0),

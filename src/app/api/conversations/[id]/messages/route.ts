@@ -26,11 +26,24 @@ export async function GET(
     .maybeSingle();
   if (!conv) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
-  const { data, error } = await supabase
-    .from('messages')
+  // Use the author-joined view so each message includes the sender's display
+  // name and avatar — handy for shared conversations to attribute messages.
+  // Falls back to plain messages if the view doesn't exist yet (older DBs).
+  let { data, error } = await supabase
+    .from('messages_with_author')
     .select('*')
     .eq('conversation_id', params.id)
     .order('created_at', { ascending: true });
+
+  if (error) {
+    const fallback = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', params.id)
+      .order('created_at', { ascending: true });
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ messages: data ?? [] });

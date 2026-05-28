@@ -17,6 +17,7 @@ import {
   Volume2,
   Square as Stop,
   GitBranch,
+  MessageSquareOff,
 } from 'lucide-react';
 import type { Message } from '@/lib/types';
 import { cn, formatTime } from '@/lib/utils';
@@ -36,7 +37,7 @@ const sanitizeSchema = {
 
 interface Props {
   message: Message;
-  user: { displayName: string; avatarUrl: string | null };
+  user: { id?: string; displayName: string; avatarUrl: string | null };
   personaEmoji: string;
   personaName: string;
   isStreaming?: boolean;
@@ -80,6 +81,14 @@ export function MessageBubble({
 
   void user; // Avatar is shown in header bar; keeping prop for future use
 
+  // Decide what label to show above each message.
+  // - assistant: persona emoji + name
+  // - your own user message: "You"
+  // - someone else's user message in a shared chat: their display name (from
+  //   messages_with_author view), falling back to "Member"
+  const isMine = isUser && (!message.user_id || !user.id || message.user_id === user.id);
+  const userLabel = isMine ? 'You' : message.author_display_name || 'Member';
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
@@ -89,13 +98,22 @@ export function MessageBubble({
     >
       <div className="flex items-baseline gap-3 mb-1.5">
         <p className={cn('text-[12px] font-medium', isUser ? 'text-subtle' : 'text-fg')}>
-          {isUser ? 'You' : (
+          {isUser ? userLabel : (
             <>
               <span className="opacity-70 mr-1">{personaEmoji}</span>
               {personaName}
             </>
           )}
         </p>
+        {message.silent && (
+          <span
+            className="text-[10px] uppercase tracking-wider text-faint flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted/60"
+            title="Sent silently — the AI did not see this message"
+          >
+            <MessageSquareOff className="h-2.5 w-2.5" />
+            <span>Silent</span>
+          </span>
+        )}
         <p className="text-[10.5px] text-faint opacity-0 group-hover:opacity-100 transition">
           {formatTime(message.created_at)}
         </p>
@@ -154,7 +172,14 @@ export function MessageBubble({
           </div>
         </div>
       ) : isUser ? (
-        <p className="text-[15px] leading-[1.7] whitespace-pre-wrap text-fg">
+        <p
+          className={cn(
+            'text-[15px] leading-[1.7] whitespace-pre-wrap',
+            message.silent
+              ? 'text-subtle italic border-l-2 border-hairline pl-3'
+              : 'text-fg',
+          )}
+        >
           {message.content}
         </p>
       ) : (

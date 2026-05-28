@@ -40,12 +40,21 @@ export default async function HomePage({
 
   let messages: any[] = [];
   if (activeId) {
-    const { data } = await supabase
-      .from('messages')
+    // Try author-joined view first (gives display_name + avatar for shared chats).
+    let res = await supabase
+      .from('messages_with_author')
       .select('*')
       .eq('conversation_id', activeId)
       .order('created_at', { ascending: true });
-    messages = data ?? [];
+    if (res.error) {
+      // View not yet migrated — fall back to plain messages table.
+      res = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', activeId)
+        .order('created_at', { ascending: true });
+    }
+    messages = res.data ?? [];
   }
 
   return (

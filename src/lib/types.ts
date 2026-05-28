@@ -27,10 +27,14 @@ export interface Conversation {
 export interface Message {
   id: string;
   conversation_id: string;
+  user_id?: string;
   role: MessageRole;
   content: string;
   attachments?: Attachment[] | null;
   created_at: string;
+  silent?: boolean;
+  author_display_name?: string | null;
+  author_avatar_url?: string | null;
 }
 
 export interface Attachment {
