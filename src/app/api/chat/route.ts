@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: 'invalid input', issues: parsed.error.issues }, { status: 400 });
   }
-  const { conversationId, message, attachments } = parsed.data;
+  const { conversationId, message, attachments, silent } = parsed.data;
 
   // Verify the user can access this conversation (owner OR member).
   // RLS will filter automatically — we just need to check that *some* row comes back.
@@ -132,9 +132,22 @@ export async function POST(request: NextRequest) {
     role: 'user',
     content: persistedContent,
     attachments: storedAttachments.length ? storedAttachments : null,
+    silent: silent ?? false,
   });
   if (insertErr) {
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
+  }
+
+  // Silent mode: save the user's message but skip AI generation entirely.
+  // Used in collaboration mode for human-to-human chatter in shared conversations.
+  if (silent) {
+    return new Response('', {
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-keko-silent': '1',
+      },
+    });
   }
 
   // Build history for the model

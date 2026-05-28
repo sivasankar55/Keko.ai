@@ -39,7 +39,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   const { upload } = useFileUpload(conversation.id);
 
   // Realtime: append messages from other clients (de-dup by id), track presence.
-  const { presence } = useRealtimeChannel({
+  const { presence, notifyPeers } = useRealtimeChannel({
     conversationId: conversation.id,
     selfUserId: user.id,
     selfDisplayName: user.displayName,
@@ -162,7 +162,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     }
   }
 
-  async function streamChat(content: string, attachments: Attachment[]) {
+  async function streamChat(content: string, attachments: Attachment[], silent: boolean) {
     const ac = new AbortController();
     abortRef.current = ac;
     try {
@@ -178,6 +178,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
             type: a.type,
             size: a.size,
           })),
+          silent,
         }),
         signal: ac.signal,
       });
@@ -185,6 +186,14 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
       if (!res.ok || !res.body) {
         const txt = await res.text().catch(() => '');
         throw new Error(txt || `HTTP ${res.status}`);
+      }
+
+      // In silent mode the server returns an empty body. Skip the streaming
+      // loop entirely and let the finally block re-sync from the DB.
+      if (silent || res.headers.get('x-keko-silent') === '1') {
+        // Notify peers so they refresh and see the silent message right away.
+        notifyPeers();
+        return;
       }
 
       const reader = res.body.getReader();
@@ -232,19 +241,34 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
       // Sync local state with the database — replaces optimistic `temp-*` IDs
       // with real ones so subsequent delete/regenerate/edit work after a refresh.
       await refreshMessages();
+      // Also poke peers so they refresh immediately rather than waiting on
+      // realtime/polling. Cheap: just a broadcast event.
+      try { notifyPeers(); } catch { /* ignore */ }
     }
   }
 
-  async function sendMessage(content: string, attachments: Attachment[]) {
+  async function sendMessage(content: string, attachments: Attachment[], silent = false) {
     sounds.send();
     const userMsg: Message = {
       id: `temp-u-${Date.now()}`,
       conversation_id: conversation.id,
+      user_id: user.id,
       role: 'user',
       content,
       attachments: attachments.length ? attachments : null,
       created_at: new Date().toISOString(),
+      silent,
+      author_display_name: user.displayName,
+      author_avatar_url: user.avatarUrl,
     };
+    if (silent) {
+      // No assistant placeholder — the AI is staying out of this one.
+      setMessages((m) => [...m, userMsg]);
+      setStreaming(true);
+      await streamChat(content, attachments, true);
+      setStreaming(false);
+      return;
+    }
     const assistantMsg: Message = {
       id: `temp-a-${Date.now()}`,
       conversation_id: conversation.id,
@@ -254,7 +278,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     };
     setMessages((m) => [...m, userMsg, assistantMsg]);
     setStreaming(true);
-    await streamChat(content, attachments);
+    await streamChat(content, attachments, false);
     setStreaming(false);
   }
 
@@ -299,7 +323,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     setMessages((m) => [...m.slice(0, index), placeholder]);
     setStreaming(true);
     const attachments = (userMsg.attachments ?? []) as Attachment[];
-    await streamChat(userMsg.content, attachments);
+    await streamChat(userMsg.content, attachments, false);
     setStreaming(false);
   }
 
@@ -332,7 +356,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     setMessages((m) => [...m.slice(0, index), userMsg, assistantMsg]);
     setStreaming(true);
     const attachments = (target.attachments ?? []) as Attachment[];
-    await streamChat(newContent, attachments);
+    await streamChat(newContent, attachments, false);
     setStreaming(false);
   }
 
@@ -639,6 +663,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         externalAttachments={pendingDrop}
         onConsumeExternal={() => setPendingDrop(undefined)}
         initialText={initialPrompt}
+        showSilentToggle={presence.length > 1}
       />
 
       <DocumentsModal
