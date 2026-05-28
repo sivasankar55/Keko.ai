@@ -42,9 +42,13 @@ export function ChatShell({
     setConversations(initialConvs);
   }, [initialConvs]);
 
-  useEffect(() => {
-    setCustomPersonas(initialCustom);
-  }, [initialCustom]);
+  // Note: we intentionally do NOT sync customPersonas from initialCustom on
+  // re-renders. The page is `force-dynamic` and any router.refresh() ships a
+  // fresh server payload — but if a freshly-created persona hasn't yet hit the
+  // server roundtrip, syncing here would clobber the optimistic update and
+  // make the new persona "disappear" from the sidebar dropdown until the user
+  // selects it elsewhere. The PersonaModal refreshes itself on open, so the
+  // canonical list is always recoverable.
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -93,15 +97,20 @@ export function ChatShell({
   );
 
   async function handleDelete(id: string) {
+    const conv = conversations.find((c) => c.id === id);
+    const isOwner = conv ? conv.user_id === user.id : true;
+    const verb = isOwner ? 'Delete' : 'Leave';
+    const past = isOwner ? 'Deleted' : 'Left conversation';
+
     const res = await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
     if (!res.ok) {
-      toast({ title: 'Delete failed', variant: 'error' });
+      toast({ title: `${verb} failed`, variant: 'error' });
       return;
     }
     setConversations((c) => c.filter((x) => x.id !== id));
     if (activeConversationId === id) router.push('/');
     router.refresh();
-    toast({ title: 'Deleted', variant: 'success' });
+    toast({ title: past, variant: 'success' });
   }
 
   async function handleRename(id: string, title: string) {
@@ -168,6 +177,7 @@ export function ChatShell({
       <div className="hidden lg:block w-[260px] shrink-0 h-full">
         <Sidebar
           user={user}
+          selfUserId={user.id}
           conversations={conversations}
           customPersonas={customPersonas}
           activeId={activeConversationId}
@@ -201,6 +211,7 @@ export function ChatShell({
             >
               <Sidebar
                 user={user}
+                selfUserId={user.id}
                 conversations={conversations}
                 customPersonas={customPersonas}
                 activeId={activeConversationId}

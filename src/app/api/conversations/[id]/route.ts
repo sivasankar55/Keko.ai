@@ -69,20 +69,50 @@ export async function DELETE(
     return NextResponse.json({ error: 'invalid id' }, { status: 400 });
   }
 
-  const prefix = `${user.id}/${params.id}/`;
-  const { data: files } = await supabase.storage.from('attachments').list(prefix, { limit: 100 });
-  if (files && files.length > 0) {
-    await supabase.storage
+  // Look up the conversation to determine the caller's role.
+  // RLS on `conversations` allows SELECT for owner OR member.
+  const { data: conv, error: convErr } = await supabase
+    .from('conversations')
+    .select('id, user_id')
+    .eq('id', params.id)
+    .maybeSingle();
+
+  if (convErr) return NextResponse.json({ error: convErr.message }, { status: 500 });
+  if (!conv) return NextResponse.json({ error: 'not found' }, { status: 404 });
+
+  const isOwner = conv.user_id === user.id;
+
+  if (isOwner) {
+    // Owner: hard-delete attachments + conversation row.
+    // Messages and member rows cascade away via FK.
+    const prefix = `${user.id}/${params.id}/`;
+    const { data: files } = await supabase.storage
       .from('attachments')
-      .remove(files.map((f) => `${prefix}${f.name}`));
+      .list(prefix, { limit: 100 });
+    if (files && files.length > 0) {
+      await supabase.storage
+        .from('attachments')
+        .remove(files.map((f) => `${prefix}${f.name}`));
+    }
+
+    const { error } = await supabase
+      .from('conversations')
+      .delete()
+      .eq('id', params.id)
+      .eq('user_id', user.id);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, action: 'deleted' });
   }
 
-  const { error } = await supabase
-    .from('conversations')
+  // Member: leave the conversation by removing their membership row.
+  // The "members can leave" RLS policy permits this for non-owner roles.
+  const { error: leaveErr } = await supabase
+    .from('conversation_members')
     .delete()
-    .eq('id', params.id)
+    .eq('conversation_id', params.id)
     .eq('user_id', user.id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+  if (leaveErr) return NextResponse.json({ error: leaveErr.message }, { status: 500 });
+  return NextResponse.json({ ok: true, action: 'left' });
 }

@@ -29,6 +29,7 @@ import type { Conversation, Persona } from '@/lib/types';
 
 interface Props {
   user: { displayName: string; email: string; avatarUrl: string | null };
+  selfUserId: string;
   conversations: Conversation[];
   customPersonas: Persona[];
   activeId: string | null;
@@ -45,6 +46,7 @@ interface Props {
 
 export function Sidebar({
   user,
+  selfUserId,
   conversations,
   customPersonas,
   activeId,
@@ -177,6 +179,7 @@ export function Sidebar({
                 const isActive = c.id === activeId;
                 const isEditing = editingId === c.id;
                 const isPinned = !!c.pinned_at;
+                const isOwner = c.user_id === selfUserId;
                 return (
                   <div key={c.id} className="relative group">
                     {isEditing ? (
@@ -255,34 +258,38 @@ export function Sidebar({
                             {isPinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
                             {isPinned ? 'Unpin' : 'Pin'}
                           </button>
-                          <button
-                            onClick={() => {
-                              onShare(c.id);
-                              setOpenMenu(null);
-                            }}
-                            className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
-                          >
-                            <Share2 className="h-3 w-3" /> Share
-                          </button>
-                          <button
-                            onClick={() => {
-                              onExport(c.id);
-                              setOpenMenu(null);
-                            }}
-                            className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
-                          >
-                            <Download className="h-3 w-3" /> Export
-                          </button>
-                          <button
-                            onClick={() => {
-                              setEditingId(c.id);
-                              setEditVal(c.title);
-                              setOpenMenu(null);
-                            }}
-                            className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
-                          >
-                            <Pencil className="h-3 w-3" /> Rename
-                          </button>
+                          {isOwner && (
+                            <>
+                              <button
+                                onClick={() => {
+                                  onShare(c.id);
+                                  setOpenMenu(null);
+                                }}
+                                className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
+                              >
+                                <Share2 className="h-3 w-3" /> Share
+                              </button>
+                              <button
+                                onClick={() => {
+                                  onExport(c.id);
+                                  setOpenMenu(null);
+                                }}
+                                className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
+                              >
+                                <Download className="h-3 w-3" /> Export
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingId(c.id);
+                                  setEditVal(c.title);
+                                  setOpenMenu(null);
+                                }}
+                                className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-muted transition flex items-center gap-2"
+                              >
+                                <Pencil className="h-3 w-3" /> Rename
+                              </button>
+                            </>
+                          )}
                           <button
                             onClick={() => {
                               onDelete(c.id);
@@ -290,7 +297,15 @@ export function Sidebar({
                             }}
                             className="w-full text-left text-[13px] px-2.5 py-1.5 rounded hover:bg-danger/10 text-danger transition flex items-center gap-2"
                           >
-                            <Trash2 className="h-3 w-3" /> Delete
+                            {isOwner ? (
+                              <>
+                                <Trash2 className="h-3 w-3" /> Delete
+                              </>
+                            ) : (
+                              <>
+                                <LogOut className="h-3 w-3" /> Leave
+                              </>
+                            )}
                           </button>
                         </motion.div>
                       )}

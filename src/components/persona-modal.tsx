@@ -23,6 +23,39 @@ export function PersonaModal({ open, onClose, customPersonas, onCreated, onDelet
   const [systemPrompt, setSystemPrompt] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Local view of personas — seeded from props, refreshed from the server on open.
+  // We keep an internal copy so the modal stays accurate even if parent state
+  // briefly desyncs (e.g., RSC re-renders that overwrite optimistic updates).
+  const [localPersonas, setLocalPersonas] = useState<Persona[]>(customPersonas);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Sync local view with parent prop whenever it changes.
+  useEffect(() => {
+    setLocalPersonas(customPersonas);
+  }, [customPersonas]);
+
+  // On open, pull fresh from the server so this modal is always accurate.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setRefreshing(true);
+    fetch('/api/personas', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        if (Array.isArray(j.personas)) setLocalPersonas(j.personas);
+      })
+      .catch(() => {
+        // ignore — we'll keep showing the prop-derived list
+      })
+      .finally(() => {
+        if (!cancelled) setRefreshing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
   useEffect(() => {
     if (open) {
       setName('');
@@ -47,6 +80,9 @@ export function PersonaModal({ open, onClose, customPersonas, onCreated, onDelet
         throw new Error(j.error ?? 'Could not save');
       }
       const { persona } = await res.json();
+      // Update local list immediately so the modal reflects the new persona,
+      // and notify the parent so the sidebar dropdown updates too.
+      setLocalPersonas((s) => [persona, ...s]);
       onCreated(persona);
       toast({ title: 'Persona created', variant: 'success' });
       onClose();
@@ -63,6 +99,7 @@ export function PersonaModal({ open, onClose, customPersonas, onCreated, onDelet
       toast({ title: 'Delete failed', variant: 'error' });
       return;
     }
+    setLocalPersonas((s) => s.filter((p) => p.id !== id));
     onDeleted(id);
     toast({ title: 'Persona deleted', variant: 'success' });
   }
@@ -102,11 +139,14 @@ export function PersonaModal({ open, onClose, customPersonas, onCreated, onDelet
             </div>
 
             <div className="overflow-y-auto flex-1">
-              {customPersonas.length > 0 && (
+              {localPersonas.length > 0 && (
                 <div className="px-5 pt-4 pb-2">
-                  <p className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Yours</p>
+                  <p className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2 flex items-center gap-2">
+                    Yours
+                    {refreshing && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                  </p>
                   <div className="space-y-1">
-                    {customPersonas.map((p) => (
+                    {localPersonas.map((p) => (
                       <div
                         key={p.id}
                         className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-muted/60 transition group"
