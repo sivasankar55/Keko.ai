@@ -42,9 +42,13 @@ export function ChatShell({
     setConversations(initialConvs);
   }, [initialConvs]);
 
-  useEffect(() => {
-    setCustomPersonas(initialCustom);
-  }, [initialCustom]);
+  // Note: we intentionally do NOT sync customPersonas from initialCustom on
+  // re-renders. The page is `force-dynamic` and any router.refresh() ships a
+  // fresh server payload — but if a freshly-created persona hasn't yet hit the
+  // server roundtrip, syncing here would clobber the optimistic update and
+  // make the new persona "disappear" from the sidebar dropdown until the user
+  // selects it elsewhere. The PersonaModal refreshes itself on open, so the
+  // canonical list is always recoverable.
 
   // Global keyboard shortcuts
   useEffect(() => {
