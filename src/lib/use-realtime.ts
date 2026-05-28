@@ -117,11 +117,20 @@ export function useRealtimeChannel({
         // Catch up on anything that happened before this client subscribed
         // (own messages, peer messages sent while we were loading, etc.).
         refreshAndDispatch();
+      } else {
+        // Channel disconnected, errored, or hasn't connected yet — fall back
+        // to polling until it recovers.
+        subscribedRef.current = false;
       }
     });
 
-    // Polling safety net — every 3s catches anything realtime missed.
-    const pollHandle = setInterval(refreshAndDispatch, 3000);
+    // Polling safety net — only ticks while the channel is NOT subscribed.
+    // When realtime is healthy this is a no-op; when it isn't, we still
+    // converge on the truth every 5s. Keeps idle tabs cheap.
+    const pollHandle = setInterval(() => {
+      if (subscribedRef.current) return;
+      refreshAndDispatch();
+    }, 5000);
 
     // Also refresh when the tab regains focus, so a returning user catches up
     // without waiting for the next poll tick.
