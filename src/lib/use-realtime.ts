@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
 import type { Message } from '@/lib/types';
 
@@ -20,7 +21,9 @@ interface Opts {
 
 /**
  * Subscribe to a conversation's realtime channel:
- * - Postgres INSERTs on messages → fetch full row from API + call onIncomingMessage
+ * - Postgres INSERTs on messages → fetch full row from API + dispatch
+ * - Broadcast pings from peers → fetch and dispatch immediately
+ * - Periodic polling as a safety net (3s)
  * - Presence → list of currently-active members
  *
  * We re-fetch via the messages API rather than trusting the realtime payload
@@ -42,7 +45,12 @@ export function useRealtimeChannel({
   // Track which message IDs we've already delivered to avoid double inserts.
   const seenIds = useRef<Set<string>>(new Set());
 
-  // Polling fallback for cases where realtime CDC drops events.
+  // Hold a ref to the live channel so notifyPeers() can broadcast on the
+  // already-subscribed connection (Supabase requires .subscribe() before .send()).
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const subscribedRef = useRef(false);
+
+  // Reset the seen-set whenever we switch conversations.
   useEffect(() => {
     seenIds.current = new Set();
   }, [conversationId]);
@@ -52,6 +60,8 @@ export function useRealtimeChannel({
     const channel = supabase.channel(`conv:${conversationId}`, {
       config: { presence: { key: selfUserId } },
     });
+    channelRef.current = channel;
+    subscribedRef.current = false;
 
     async function refreshAndDispatch() {
       try {
@@ -82,7 +92,7 @@ export function useRealtimeChannel({
     );
 
     // Broadcast channel: peers can ping us when they send a message,
-    // as a fallback path that doesn't rely on Postgres CDC.
+    // as a fast path that doesn't rely on Postgres CDC.
     channel.on('broadcast', { event: 'message_sent' }, () => {
       refreshAndDispatch();
     });
@@ -98,29 +108,44 @@ export function useRealtimeChannel({
 
     channel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
+        subscribedRef.current = true;
         await channel.track({
           user_id: selfUserId,
           display_name: selfDisplayName,
           avatar_url: selfAvatarUrl,
         } as PresenceUser);
+        // Catch up on anything that happened before this client subscribed
+        // (own messages, peer messages sent while we were loading, etc.).
+        refreshAndDispatch();
       }
     });
 
-    // Polling fallback every 8s — catches anything realtime missed.
-    const pollHandle = setInterval(refreshAndDispatch, 8000);
+    // Polling safety net — every 3s catches anything realtime missed.
+    const pollHandle = setInterval(refreshAndDispatch, 3000);
+
+    // Also refresh when the tab regains focus, so a returning user catches up
+    // without waiting for the next poll tick.
+    const onFocus = () => refreshAndDispatch();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
 
     return () => {
       clearInterval(pollHandle);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+      subscribedRef.current = false;
+      channelRef.current = null;
       supabase.removeChannel(channel);
     };
   }, [conversationId, selfUserId, selfDisplayName, selfAvatarUrl]);
 
-  // Helper exposed to callers: notify peers that we just sent a message,
-  // so they can refresh their state immediately.
+  // Notify peers that we just sent a message so they refresh immediately.
+  // Uses the live, already-subscribed channel — Supabase requires that for
+  // broadcast .send() to actually emit anything.
   function notifyPeers() {
-    const supabase = createClient();
-    const channel = supabase.channel(`conv:${conversationId}`);
-    channel.send({ type: 'broadcast', event: 'message_sent', payload: {} });
+    const ch = channelRef.current;
+    if (!ch || !subscribedRef.current) return;
+    ch.send({ type: 'broadcast', event: 'message_sent', payload: {} });
   }
 
   return { presence, notifyPeers };
