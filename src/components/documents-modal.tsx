@@ -22,11 +22,13 @@ interface Props {
   onClose: () => void;
   conversationId: string | null;
   onChange?: () => void;
+  /** Pre-fill the composer with a prompt when a doc is "ready". */
+  onAskAbout?: (documentName: string) => void;
 }
 
 const ALLOWED = ['application/pdf', 'text/plain', 'text/markdown'];
 
-export function DocumentsModal({ open, onClose, conversationId, onChange }: Props) {
+export function DocumentsModal({ open, onClose, conversationId, onChange, onAskAbout }: Props) {
   const [docs, setDocs] = useState<RagDoc[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -198,6 +200,18 @@ export function DocumentsModal({ open, onClose, conversationId, onChange }: Prop
                           </p>
                         </div>
                         <StatusBadge status={d.status} />
+                        {d.status === 'ready' && onAskAbout && (
+                          <button
+                            onClick={() => {
+                              onAskAbout(d.name);
+                              onClose();
+                            }}
+                            className="text-[11px] text-subtle hover:text-fg transition px-2 py-1 rounded hover:bg-bg"
+                            title="Ask about this document"
+                          >
+                            Ask
+                          </button>
+                        )}
                         <button
                           onClick={() => deleteDoc(d.id)}
                           className="text-faint hover:text-danger opacity-0 group-hover:opacity-100 transition p-1.5 rounded hover:bg-bg"
