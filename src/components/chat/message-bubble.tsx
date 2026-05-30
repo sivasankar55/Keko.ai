@@ -23,6 +23,7 @@ import type { Message } from '@/lib/types';
 import { cn, formatTime } from '@/lib/utils';
 import { CodeBlock } from './code-block';
 import { useTTS } from '@/lib/use-tts';
+import { MessageReactions, type ReactionAggregate } from './reactions';
 
 // Allow class on code/pre/span so syntax highlighting can apply colors.
 const sanitizeSchema = {
@@ -45,6 +46,10 @@ interface Props {
   onEdit?: (newContent: string) => void;
   onDelete?: () => void;
   onBranch?: () => void;
+  /** Aggregated reactions for this message (host owns the data). */
+  reactions?: ReactionAggregate[];
+  /** Called after a reaction is added/removed locally so the host can broadcast. */
+  onReactionChanged?: () => void;
 }
 
 export function MessageBubble({
@@ -57,6 +62,8 @@ export function MessageBubble({
   onEdit,
   onDelete,
   onBranch,
+  reactions,
+  onReactionChanged,
 }: Props) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
@@ -243,6 +250,17 @@ export function MessageBubble({
             </ActionBtn>
           )}
         </div>
+      )}
+
+      {/* Reactions strip — always rendered when there are existing reactions,
+          plus a hover-only "+ add" button. Skipped while streaming. */}
+      {!isStreaming && !message.id.startsWith('temp-') && (
+        <MessageReactions
+          messageId={message.id}
+          reactions={reactions ?? []}
+          onChanged={onReactionChanged}
+          disabled={isStreaming}
+        />
       )}
 
       <div className="mt-7 h-px bg-hairline last:hidden" />

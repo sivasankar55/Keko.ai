@@ -15,6 +15,7 @@ import { useFileUpload } from '@/lib/use-file-upload';
 import { sounds } from '@/lib/audio';
 import { useRealtimeChannel } from '@/lib/use-realtime';
 import type { SlashKind } from '@/lib/slash-commands';
+import type { ReactionAggregate } from './reactions';
 import type { Conversation, Message, Attachment, Persona } from '@/lib/types';
 
 interface Props {
@@ -51,10 +52,11 @@ export function ChatPane({
   const [docsOpen, setDocsOpen] = useState(false);
   const [docCount, setDocCount] = useState(0);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [reactions, setReactions] = useState<Record<string, ReactionAggregate[]>>({});
   const { upload } = useFileUpload(conversation.id);
 
   // Realtime: append messages from other clients (de-dup by id), track presence.
-  const { presence, typing, notifyPeers, sendTyping, sendTypingStop } = useRealtimeChannel({
+  const { presence, typing, notifyPeers, sendTyping, sendTypingStop, notifyReactionChanged } = useRealtimeChannel({
     conversationId: conversation.id,
     selfUserId: user.id,
     selfDisplayName: user.displayName,
@@ -69,7 +71,65 @@ export function ChatPane({
         return copy;
       });
     },
+    onReactionChanged: (messageId) => {
+      // A peer toggled a reaction — refetch this message's aggregate.
+      refreshReactionsFor(messageId);
+    },
   });
+
+  async function refreshReactionsFor(messageId: string) {
+    if (messageId.startsWith('temp-')) return;
+    try {
+      const res = await fetch(`/api/messages/${messageId}/reactions`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const j = await res.json();
+      const list = (j.reactions ?? []) as ReactionAggregate[];
+      setReactions((prev) => ({ ...prev, [messageId]: list }));
+    } catch {
+      // ignore
+    }
+  }
+
+  // On conversation change, drop the cached map. We refetch lazily from each
+  // bubble or from the realtime hook as the user interacts.
+  useEffect(() => {
+    setReactions({});
+  }, [conversation.id]);
+
+  // Initial bulk-fetch: pull reactions for every saved message in this conv
+  // in a single call, so chips appear immediately on load.
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchAll() {
+      try {
+        const res = await fetch(
+          `/api/conversations/${conversation.id}/reactions`,
+          { cache: 'no-store' },
+        );
+        if (!res.ok) return;
+        const j = await res.json();
+        if (cancelled) return;
+        const map: Record<string, ReactionAggregate[]> = {};
+        for (const row of (j.reactions ?? []) as Array<ReactionAggregate & { message_id: string }>) {
+          const arr = map[row.message_id] ?? [];
+          arr.push({
+            emoji: row.emoji,
+            count: row.count,
+            mine: row.mine,
+            display_names: row.display_names,
+          });
+          map[row.message_id] = arr;
+        }
+        setReactions(map);
+      } catch {
+        // ignore
+      }
+    }
+    fetchAll();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation.id]);
 
   const persona = getPersona(conversation.persona_id, customPersonas);
 
@@ -714,6 +774,11 @@ export function ChatPane({
                   personaEmoji={persona.emoji}
                   personaName={persona.name}
                   isStreaming={streaming && isLast && isAssistant && !m.content}
+                  reactions={reactions[m.id]}
+                  onReactionChanged={async () => {
+                    await refreshReactionsFor(m.id);
+                    notifyReactionChanged(m.id);
+                  }}
                   onRegenerate={
                     isAssistant && !streaming && !m.id.startsWith('temp-')
                       ? () => regenerateAt(i)
