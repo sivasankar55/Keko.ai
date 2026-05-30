@@ -24,6 +24,8 @@ interface Opts {
   selfDisplayName: string;
   selfAvatarUrl: string | null;
   onIncomingMessage: (msg: Message) => void;
+  /** Optional: a peer reacted somewhere — caller decides what to refresh. */
+  onReactionChanged?: (messageId: string) => void;
 }
 
 /**
@@ -44,11 +46,14 @@ export function useRealtimeChannel({
   selfDisplayName,
   selfAvatarUrl,
   onIncomingMessage,
+  onReactionChanged,
 }: Opts) {
   const [presence, setPresence] = useState<PresenceUser[]>([]);
   const [typing, setTyping] = useState<TypingUser[]>([]);
   const handlerRef = useRef(onIncomingMessage);
   handlerRef.current = onIncomingMessage;
+  const reactionRef = useRef(onReactionChanged);
+  reactionRef.current = onReactionChanged;
 
   // Track which message IDs we've already delivered to avoid double inserts.
   const seenIds = useRef<Set<string>>(new Set());
@@ -123,6 +128,15 @@ export function useRealtimeChannel({
       const data = payload?.payload as { user_id?: string } | undefined;
       if (!data?.user_id) return;
       setTyping((prev) => prev.filter((t) => t.user_id !== data.user_id));
+    });
+
+    // Reactions: a peer added/removed an emoji on a message in this conv.
+    // We don't ship the new state — receivers refetch /api/messages/.../reactions
+    // since the per-message aggregate is small and RLS-aware.
+    channel.on('broadcast', { event: 'reaction_changed' }, (payload) => {
+      const data = payload?.payload as { message_id?: string } | undefined;
+      if (!data?.message_id) return;
+      reactionRef.current?.(data.message_id);
     });
 
     channel.on('presence', { event: 'sync' }, () => {
@@ -218,5 +232,17 @@ export function useRealtimeChannel({
     });
   }
 
-  return { presence, typing, notifyPeers, sendTyping, sendTypingStop };
+  // Tell peers a reaction was added or removed on a specific message.
+  // They re-fetch the per-message aggregate via the API.
+  function notifyReactionChanged(messageId: string) {
+    const ch = channelRef.current;
+    if (!ch || !subscribedRef.current) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'reaction_changed',
+      payload: { message_id: messageId },
+    });
+  }
+
+  return { presence, typing, notifyPeers, sendTyping, sendTypingStop, notifyReactionChanged };
 }
