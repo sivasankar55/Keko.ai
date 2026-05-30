@@ -59,6 +59,9 @@
 html,
 body {
   height: 100%;
+  /* Stop iOS Safari from creeping the URL bar in/out and resizing layout
+     mid-scroll. The h-screen utility maps to 100vh; we override below. */
+  overscroll-behavior-y: none;
 }
 
 body {
@@ -69,6 +72,24 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* Use the dynamic viewport height where supported so the composer doesn't
+   end up under the iOS Safari URL bar. Falls back to 100vh. */
+.h-app {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Composer & sidebar footers: respect iOS bottom safe area. */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
+.pr-safe {
+  padding-right: env(safe-area-inset-right);
 }
 
 button,

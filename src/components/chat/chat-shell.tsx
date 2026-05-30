@@ -165,10 +165,10 @@ export function ChatShell({
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex bg-bg">
+    <div className="h-app w-screen overflow-hidden flex bg-bg">
       <button
         onClick={() => setSidebarOpen(true)}
-        className="lg:hidden fixed top-4 left-4 z-30 surface rounded-md p-2"
+        className="lg:hidden fixed top-3 left-3 z-30 surface rounded-md p-2 shadow-sm"
         aria-label="Open menu"
       >
         <Menu className="h-4 w-4" />
@@ -224,6 +224,7 @@ export function ChatShell({
                 onOpenPalette={() => setPaletteOpen(true)}
                 onOpenPersonaModal={() => setPersonaModalOpen(true)}
                 onClose={() => setSidebarOpen(false)}
+                onSelectConversation={() => setSidebarOpen(false)}
               />
             </motion.div>
           </>

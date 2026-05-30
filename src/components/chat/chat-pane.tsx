@@ -604,8 +604,8 @@ export function ChatPane({
         )}
       </AnimatePresence>
 
-      <header className="px-6 lg:px-8 py-4 border-b border-hairline">
-        <div className="max-w-3xl mx-auto flex items-baseline gap-3">
+      <header className="px-4 sm:px-6 lg:px-8 py-4 border-b border-hairline pl-14 lg:pl-8">
+        <div className="max-w-3xl mx-auto flex items-baseline gap-3 flex-wrap">
           <span className="text-[14px] opacity-60">{persona.emoji}</span>
           <p className="text-[14px] text-fg truncate">{conversation.title}</p>
           {presence.length > 1 && (
@@ -643,7 +643,7 @@ export function ChatPane({
               <span aria-hidden>↗</span>
             </button>
           )}
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-1 flex-wrap">
             <button
               onClick={() => setInviteOpen(true)}
               className="text-[11.5px] text-faint hover:text-fg transition flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted"
@@ -676,7 +676,7 @@ export function ChatPane({
                 router.refresh();
               }}
             />
-            <p className="text-[12px] text-faint truncate ml-1">
+            <p className="text-[12px] text-faint truncate ml-1 hidden md:inline">
               {persona.name}{persona.custom ? ' · custom' : ''}
             </p>
           </div>
@@ -686,7 +686,7 @@ export function ChatPane({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 overflow-y-auto px-6 lg:px-8 py-10"
+        className="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10"
       >
         <div className="max-w-3xl mx-auto space-y-7">
           {messages.length === 0 && (

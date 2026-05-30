@@ -22,17 +22,17 @@ export function EmptyState({ onStart, onStartWithPrompt, customPersonas, onCreat
   const filtered = PROMPTS.filter((p) => p.category === activeCategory);
 
   return (
-    <div className="h-full grid place-items-center px-6 py-10 overflow-y-auto">
+    <div className="h-full grid place-items-center px-4 sm:px-6 py-6 sm:py-10 overflow-y-auto pb-safe">
       <div className="max-w-2xl w-full">
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         >
-          <p className="font-display text-[clamp(40px,7vw,64px)] leading-[1.02] tracking-tight">
+          <p className="font-display text-[clamp(34px,7vw,64px)] leading-[1.05] tracking-tight pl-12 lg:pl-0">
             Begin a <span className="italic text-subtle">quiet</span> conversation.
           </p>
-          <p className="text-subtle mt-4 text-[15px] max-w-md">
+          <p className="text-subtle mt-4 text-[15px] max-w-md pl-12 lg:pl-0">
             Choose a voice or pick a starter. Switch any time. Your conversations stay private.
           </p>
         </motion.div>

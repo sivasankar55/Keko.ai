@@ -42,6 +42,9 @@ interface Props {
   onOpenPalette: () => void;
   onOpenPersonaModal: () => void;
   onClose?: () => void;
+  /** Called whenever the user navigates to a conversation from the list.
+   *  In the mobile drawer this triggers a close so the chat appears. */
+  onSelectConversation?: () => void;
 }
 
 export function Sidebar({
@@ -59,6 +62,7 @@ export function Sidebar({
   onOpenPalette,
   onOpenPersonaModal,
   onClose,
+  onSelectConversation,
 }: Props) {
   const { theme, toggle } = useTheme();
   const [showPersonas, setShowPersonas] = useState(false);
@@ -205,6 +209,7 @@ export function Sidebar({
                     ) : (
                       <Link
                         href={`/?c=${c.id}`}
+                        onClick={() => onSelectConversation?.()}
                         className={cn(
                           'block rounded-md px-3 py-1.5 transition relative',
                           isActive
@@ -318,7 +323,7 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="border-t border-hairline px-3 py-3 flex items-center gap-2">
+      <div className="border-t border-hairline px-3 py-3 pb-safe flex items-center gap-2">
         <div className="h-7 w-7 rounded-full bg-muted grid place-items-center text-[11px] font-medium text-fg shrink-0 overflow-hidden">
           {user.avatarUrl ? (
             // eslint-disable-next-line @next/next/no-img-element

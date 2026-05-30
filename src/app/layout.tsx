@@ -14,6 +14,9 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 5,
+  // Let the page extend under the iOS home indicator and notch; we add
+  // safe-area padding where it matters (composer, sidebar footer).
+  viewportFit: 'cover',
 };
 
 // Prevent flash of wrong theme on load

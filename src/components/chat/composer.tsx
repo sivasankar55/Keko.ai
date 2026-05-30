@@ -265,7 +265,7 @@ export function Composer({
     !disabled && (imageMode ? text.trim().length > 0 : text.trim().length > 0 || attachments.length > 0);
 
   return (
-    <div className="px-6 lg:px-8 pb-6 pt-2">
+    <div className="px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 pt-2 pb-safe">
       <div className="max-w-3xl mx-auto relative">
         <AnimatePresence>
           {slashOpen && (
