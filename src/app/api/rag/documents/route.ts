@@ -4,11 +4,18 @@ import { chunkText, embedBatch } from '@/lib/embeddings';
 import { genAI } from '@/lib/ai';
 
 export const runtime = 'nodejs';
-export const maxDuration = 120;
+// Vercel Hobby caps function execution at 60s. Anything past that is a
+// platform-level kill and arrives at the client as a 504 + HTML page.
+// We size internal work to fit comfortably below this ceiling.
+export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 const ALLOWED = ['application/pdf', 'text/plain', 'text/markdown'];
 const MAX_BYTES = 8 * 1024 * 1024;
+// Hard cap on chunks per document. Beyond this we'd risk the 60s timeout
+// during embedding even with parallel batches; better to fail fast with
+// a useful message.
+const MAX_CHUNKS = 200;
 
 // List the user's RAG documents (optionally for a conversation).
 export async function GET(request: NextRequest) {
@@ -150,6 +157,12 @@ export async function POST(request: NextRequest) {
     const chunks = chunkText(raw);
     if (chunks.length === 0) {
       throw new Error('No readable text extracted from the file.');
+    }
+    if (chunks.length > MAX_CHUNKS) {
+      throw new Error(
+        `Document too large to index in one shot (${chunks.length} chunks). ` +
+          'Please split it into parts of roughly 50 pages or fewer.',
+      );
     }
 
     const vectors = await embedBatch(chunks);
