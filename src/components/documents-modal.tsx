@@ -71,10 +71,14 @@ export function DocumentsModal({ open, onClose, conversationId, onChange, onAskA
         fd.append('file', file);
         fd.append('conversationId', conversationId);
         const res = await fetch('/api/rag/documents', { method: 'POST', body: fd });
-        const j = await res.json();
-        if (!res.ok) {
-          throw new Error(j.error ?? 'Upload failed');
+
+        // Parse safely: a timeout/proxy error often returns HTML, which
+        // would throw a confusing JSON SyntaxError if we just called .json().
+        const errMessage = await readErrorOrJson(res);
+        if (typeof errMessage === 'string') {
+          throw new Error(errMessage);
         }
+        const j = errMessage;
         setDocs((d) => [j.document, ...d.filter((x) => x.id !== tempId)]);
         toast({
           title: `Indexed: ${j.document.name}`,
@@ -263,4 +267,42 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Tolerant response reader. Handles three cases:
+ *   - 2xx + valid JSON      → returns parsed body
+ *   - non-2xx + JSON error  → returns the .error string from the body
+ *   - non-JSON (HTML/empty) → returns a human-friendly message instead of
+ *     letting the caller die on a SyntaxError. This is the case that
+ *     happens when an upstream proxy times out and serves an HTML page
+ *     in place of our handler's JSON response.
+ */
+async function readErrorOrJson(res: Response): Promise<any | string> {
+  const contentType = res.headers.get('content-type') ?? '';
+  const isJson = contentType.includes('application/json');
+
+  if (res.ok && isJson) {
+    return res.json();
+  }
+
+  // Body might be JSON with an .error field (our own error path)
+  // or HTML / empty (a proxy error). Try JSON first.
+  if (isJson) {
+    try {
+      const j = await res.json();
+      return j.error ?? `Upload failed (HTTP ${res.status})`;
+    } catch {
+      return `Upload failed (HTTP ${res.status})`;
+    }
+  }
+
+  const text = (await res.text().catch(() => '')).slice(0, 200);
+  if (res.status === 504 || /timeout/i.test(text) || /timed out/i.test(text)) {
+    return 'Upload timed out. Try a smaller PDF, or split it into parts.';
+  }
+  if (res.status >= 500) {
+    return `Server error (HTTP ${res.status}). Please retry.`;
+  }
+  return `Upload failed (HTTP ${res.status})`;
 }

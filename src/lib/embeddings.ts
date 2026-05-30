@@ -16,14 +16,22 @@ export async function embed(text: string, taskType: 'RETRIEVAL_DOCUMENT' | 'RETR
 }
 
 /**
- * Embed multiple texts. Done sequentially to stay under the free-tier
- * RPM limit; for hundreds of chunks this is still fast enough.
+ * Embed multiple texts in parallel batches. Gemini's free tier allows
+ * a reasonable number of concurrent requests; running in waves of 5
+ * gives a big speedup over the previous fully-sequential loop without
+ * tripping rate limits.
  */
 export async function embedBatch(texts: string[]) {
-  const out: number[][] = [];
-  for (const t of texts) {
-    const v = await embed(t, 'RETRIEVAL_DOCUMENT');
-    out.push(v);
+  const out: number[][] = new Array(texts.length);
+  const concurrency = 5;
+  for (let i = 0; i < texts.length; i += concurrency) {
+    const slice = texts.slice(i, i + concurrency);
+    const vectors = await Promise.all(
+      slice.map((t) => embed(t, 'RETRIEVAL_DOCUMENT')),
+    );
+    for (let j = 0; j < vectors.length; j++) {
+      out[i + j] = vectors[j];
+    }
   }
   return out;
 }
