@@ -3,6 +3,19 @@ import { createClient } from '@/lib/supabase/server';
 import { chunkText, embedBatch } from '@/lib/embeddings';
 import { genAI } from '@/lib/ai';
 
+/**
+ * Lazily import pdf-parse so its module-init side effects (it tries to
+ * open a test PDF on first load) only run when we actually need it.
+ */
+async function extractPdfText(buf: Buffer): Promise<string> {
+  const mod: any = await import('pdf-parse');
+  const pdfParse = (mod.default ?? mod) as (
+    data: Buffer,
+  ) => Promise<{ text: string; numpages: number }>;
+  const parsed = await pdfParse(buf);
+  return parsed.text ?? '';
+}
+
 export const runtime = 'nodejs';
 // Vercel Hobby caps function execution at 60s. Anything past that is a
 // platform-level kill and arrives at the client as a 504 + HTML page.
@@ -111,44 +124,55 @@ export async function POST(request: NextRequest) {
   try {
     let raw = '';
     if (mime === 'application/pdf') {
-      // Try transcription with progressively cheaper models until one works.
-      const transcribeChain = [
-        'gemini-2.5-flash-lite',
-        'gemini-2.0-flash-lite',
-        'gemini-flash-latest',
-        'gemini-2.0-flash',
-      ];
-      let lastTranscribeErr: any = null;
-      for (const modelName of transcribeChain) {
-        try {
-          const model = genAI.getGenerativeModel({
-            model: modelName,
-            generationConfig: { temperature: 0, maxOutputTokens: 8192 },
-          });
-          const result = await model.generateContent([
-            {
-              inlineData: { data: buf.toString('base64'), mimeType: mime },
-            },
-            {
-              text:
-                'Transcribe the entire content of this PDF as plain text. ' +
-                'Preserve paragraph breaks. Keep table contents readable. ' +
-                'Do not summarize or add commentary, just the text.',
-            },
-          ]);
-          raw = result.response.text() ?? '';
-          if (raw.trim().length > 0) break;
-        } catch (e: any) {
-          lastTranscribeErr = e;
-          // Keep trying the next model.
+      // Fast path: extract text locally with pdf-parse. Most PDFs are
+      // text-based and this finishes in well under a second.
+      try {
+        const text = await extractPdfText(buf);
+        if (text && text.trim().length > 100) {
+          raw = text;
         }
+      } catch {
+        // Bad PDF or password-protected — fall through to OCR via Gemini.
       }
-      if (!raw.trim()) {
-        throw new Error(
-          lastTranscribeErr?.message
-            ? `Transcription failed on all models. Last error: ${lastTranscribeErr.message}`
-            : 'No text extracted from PDF.',
-        );
+
+      // Slow fallback: ask Gemini to transcribe scanned/image-only PDFs.
+      // Only triggered when pdf-parse couldn't find readable text.
+      if (!raw) {
+        const transcribeChain = [
+          'gemini-2.5-flash-lite',
+          'gemini-2.0-flash-lite',
+          'gemini-flash-latest',
+          'gemini-2.0-flash',
+        ];
+        let lastTranscribeErr: any = null;
+        for (const modelName of transcribeChain) {
+          try {
+            const model = genAI.getGenerativeModel({
+              model: modelName,
+              generationConfig: { temperature: 0, maxOutputTokens: 8192 },
+            });
+            const result = await model.generateContent([
+              { inlineData: { data: buf.toString('base64'), mimeType: mime } },
+              {
+                text:
+                  'Transcribe the entire content of this PDF as plain text. ' +
+                  'Preserve paragraph breaks. Keep table contents readable. ' +
+                  'Do not summarize or add commentary, just the text.',
+              },
+            ]);
+            raw = result.response.text() ?? '';
+            if (raw.trim().length > 0) break;
+          } catch (e: any) {
+            lastTranscribeErr = e;
+          }
+        }
+        if (!raw.trim()) {
+          throw new Error(
+            lastTranscribeErr?.message
+              ? `PDF transcription failed. Last error: ${lastTranscribeErr.message}`
+              : 'No text extracted from PDF.',
+          );
+        }
       }
     } else {
       raw = buf.toString('utf-8');
