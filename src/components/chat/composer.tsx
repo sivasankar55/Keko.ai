@@ -17,6 +17,7 @@ import { toast } from '@/components/ui/toaster';
 import { ALLOWED_MIME } from '@/lib/validation';
 import { useFileUpload } from '@/lib/use-file-upload';
 import type { Attachment } from '@/lib/types';
+import type { TypingUser } from '@/lib/use-realtime';
 
 interface Props {
   conversationId: string;
@@ -28,6 +29,12 @@ interface Props {
   initialText?: string;
   /** When true, show a "silent" toggle so members can chat without invoking the AI. */
   showSilentToggle?: boolean;
+  /** Active typers (excluding self) — drives the "X is typing…" indicator. */
+  typing?: TypingUser[];
+  /** Called periodically while the user is typing. Should be safe to call repeatedly. */
+  onTyping?: () => void;
+  /** Called when the user stops typing or sends. */
+  onTypingStop?: () => void;
 }
 
 export function Composer({
@@ -39,6 +46,9 @@ export function Composer({
   onConsumeExternal,
   initialText,
   showSilentToggle,
+  typing,
+  onTyping,
+  onTypingStop,
 }: Props) {
   const [text, setText] = useState('');
   const [imageMode, setImageMode] = useState(false);
@@ -96,15 +106,61 @@ export function Composer({
     setText('');
     setAttachments([]);
     setImageMode(false);
+    // Stop typing pulse — we just sent.
+    if (typingPulseRef.current) {
+      window.clearTimeout(typingPulseRef.current);
+      typingPulseRef.current = null;
+    }
+    onTypingStop?.();
+    lastTypingSentRef.current = 0;
     // Keep silent mode sticky until user toggles it off — useful when chatting
     // back and forth with another human.
     if (taRef.current) taRef.current.style.height = 'auto';
   }
 
+  // Typing broadcast — pulse every 2s while content changes, send a stop
+  // pulse when input clears, on send, or on unmount.
+  const typingPulseRef = useRef<number | null>(null);
+  const lastTypingSentRef = useRef(0);
+
+  function pulseTyping() {
+    if (!onTyping) return;
+    const now = Date.now();
+    // Throttle: only emit once per ~1.6s.
+    if (now - lastTypingSentRef.current > 1600) {
+      lastTypingSentRef.current = now;
+      onTyping();
+    }
+    if (typingPulseRef.current) {
+      window.clearTimeout(typingPulseRef.current);
+    }
+    // After a brief pause, fire a stop pulse so peers' indicators expire fast.
+    typingPulseRef.current = window.setTimeout(() => {
+      onTypingStop?.();
+      lastTypingSentRef.current = 0;
+    }, 2000);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (typingPulseRef.current) window.clearTimeout(typingPulseRef.current);
+      onTypingStop?.();
+    };
+    // We deliberately don't depend on onTypingStop — it changes identity on
+    // every parent render which would cancel typing pulses constantly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function autosize(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setText(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+    if (e.target.value.trim().length > 0) {
+      pulseTyping();
+    } else if (onTypingStop) {
+      onTypingStop();
+      lastTypingSentRef.current = 0;
+    }
   }
 
   async function handleFiles(files: File[]) {
@@ -151,6 +207,27 @@ export function Composer({
 
   return (
     <div className="px-6 lg:px-8 pb-6 pt-2">
+      <div className="max-w-3xl mx-auto">
+        <AnimatePresence>
+          {typing && typing.length > 0 && (
+            <motion.div
+              key="typing-row"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.18 }}
+              className="px-1 pb-1.5 flex items-center gap-2 text-[12px] text-faint italic"
+            >
+              <span className="flex gap-0.5" aria-hidden>
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+              </span>
+              <span>{formatTyping(typing)}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
       <form
         onSubmit={handleSubmit}
         className="max-w-3xl mx-auto surface rounded-2xl px-3 py-2.5 transition focus-within:border-fg/40"
@@ -322,6 +399,15 @@ export function Composer({
       </form>
     </div>
   );
+}
+
+function formatTyping(typing: TypingUser[]) {
+  if (typing.length === 0) return '';
+  if (typing.length === 1) return `${typing[0].display_name} is typing`;
+  if (typing.length === 2) {
+    return `${typing[0].display_name} and ${typing[1].display_name} are typing`;
+  }
+  return `${typing[0].display_name} and ${typing.length - 1} others are typing`;
 }
 
 function ToolBtn({

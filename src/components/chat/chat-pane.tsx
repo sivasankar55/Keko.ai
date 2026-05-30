@@ -39,7 +39,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
   const { upload } = useFileUpload(conversation.id);
 
   // Realtime: append messages from other clients (de-dup by id), track presence.
-  const { presence, notifyPeers } = useRealtimeChannel({
+  const { presence, typing, notifyPeers, sendTyping, sendTypingStop } = useRealtimeChannel({
     conversationId: conversation.id,
     selfUserId: user.id,
     selfDisplayName: user.displayName,
@@ -664,6 +664,9 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         onConsumeExternal={() => setPendingDrop(undefined)}
         initialText={initialPrompt}
         showSilentToggle={presence.length > 1}
+        typing={typing}
+        onTyping={sendTyping}
+        onTypingStop={sendTypingStop}
       />
 
       <DocumentsModal
