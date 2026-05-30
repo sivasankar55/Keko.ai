@@ -9,11 +9,12 @@ import { Composer } from './composer';
 import { DocumentsModal } from '@/components/documents-modal';
 import { InviteModal } from '@/components/invite-modal';
 import { ModelPicker } from '@/components/model-picker';
-import { getPersona } from '@/lib/personas';
+import { getPersona, PERSONAS } from '@/lib/personas';
 import { toast } from '@/components/ui/toaster';
 import { useFileUpload } from '@/lib/use-file-upload';
 import { sounds } from '@/lib/audio';
 import { useRealtimeChannel } from '@/lib/use-realtime';
+import type { SlashKind } from '@/lib/slash-commands';
 import type { Conversation, Message, Attachment, Persona } from '@/lib/types';
 
 interface Props {
@@ -21,9 +22,23 @@ interface Props {
   initialMessages: Message[];
   user: { id: string; displayName: string; avatarUrl: string | null };
   customPersonas: Persona[];
+  /** Open the share modal for this conversation. Provided by chat-shell. */
+  onShare?: (id: string) => void;
+  /** Download this conversation as Markdown. Provided by chat-shell. */
+  onExport?: (id: string) => void;
+  /** Start a brand-new conversation with the given persona. */
+  onNewWithPersona?: (personaId: string, opts?: { initialPrompt?: string }) => void;
 }
 
-export function ChatPane({ conversation, initialMessages, user, customPersonas }: Props) {
+export function ChatPane({
+  conversation,
+  initialMessages,
+  user,
+  customPersonas,
+  onShare,
+  onExport,
+  onNewWithPersona,
+}: Props) {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -405,6 +420,109 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
     }
   }
 
+  // Slash command dispatcher used by the composer.
+  async function handleSlashCommand(kind: SlashKind, argument: string) {
+    switch (kind) {
+      case 'branch': {
+        // Branch from the most recent saved message.
+        const last = [...messages].reverse().find((m) => !m.id.startsWith('temp-'));
+        if (!last) {
+          toast({ title: 'Nothing to branch from yet', variant: 'error' });
+          return;
+        }
+        await branchFrom(messages.indexOf(last));
+        break;
+      }
+      case 'share': {
+        if (onShare) onShare(conversation.id);
+        else toast({ title: 'Share not available here', variant: 'error' });
+        break;
+      }
+      case 'invite': {
+        setInviteOpen(true);
+        break;
+      }
+      case 'docs': {
+        setDocsOpen(true);
+        break;
+      }
+      case 'export': {
+        if (onExport) onExport(conversation.id);
+        else toast({ title: 'Export not available here', variant: 'error' });
+        break;
+      }
+      case 'silent': {
+        // The toggle lives in the composer's local state; flipping it from
+        // here would be tricky. Instead, hint the user where to find it.
+        toast({
+          title: 'Silent mode toggle',
+          description:
+            presence.length > 1
+              ? 'Click the slashed-bubble icon in the composer.'
+              : 'Invite someone first — silent mode is for human-to-human chatter.',
+        });
+        break;
+      }
+      case 'persona': {
+        const name = argument.trim();
+        if (!name) {
+          toast({ title: 'Usage: /persona <name>', variant: 'error' });
+          return;
+        }
+        const all = [
+          ...PERSONAS,
+          ...customPersonas,
+        ];
+        const match = all.find(
+          (p) => p.name.toLowerCase() === name.toLowerCase() || p.id.toLowerCase() === name.toLowerCase(),
+        );
+        if (!match) {
+          toast({
+            title: 'Persona not found',
+            description: `No persona named "${name}".`,
+            variant: 'error',
+          });
+          return;
+        }
+        if (onNewWithPersona) onNewWithPersona(match.id);
+        break;
+      }
+      case 'clear': {
+        if (streaming) {
+          toast({ title: 'Wait for the current message to finish', variant: 'error' });
+          return;
+        }
+        if (messages.length === 0) {
+          toast({ title: 'Nothing to clear', variant: 'error' });
+          return;
+        }
+        const ok = window.confirm(
+          'Delete every message in this conversation? This cannot be undone.',
+        );
+        if (!ok) return;
+        // Truncate from the very first message — wipes the whole transcript.
+        const first = messages[0];
+        await fetch('/api/messages/truncate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(truncateBody(first)),
+        });
+        setMessages([]);
+        await refreshMessages();
+        toast({ title: 'Conversation cleared', variant: 'success' });
+        break;
+      }
+      case 'help': {
+        toast({
+          title: 'Slash commands',
+          description:
+            '/branch /share /silent /persona <name> /invite /docs /export /clear /help',
+        });
+        break;
+      }
+    }
+  }
+
   async function generateImage(prompt: string) {
     const placeholder: Message = {
       id: `temp-u-${Date.now()}`,
@@ -667,6 +785,7 @@ export function ChatPane({ conversation, initialMessages, user, customPersonas }
         typing={typing}
         onTyping={sendTyping}
         onTypingStop={sendTypingStop}
+        onSlashCommand={handleSlashCommand}
       />
 
       <DocumentsModal

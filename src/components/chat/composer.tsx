@@ -18,6 +18,12 @@ import { ALLOWED_MIME } from '@/lib/validation';
 import { useFileUpload } from '@/lib/use-file-upload';
 import type { Attachment } from '@/lib/types';
 import type { TypingUser } from '@/lib/use-realtime';
+import {
+  matchSlashCommands,
+  parseSlashInput,
+  type SlashCommand,
+  type SlashKind,
+} from '@/lib/slash-commands';
 
 interface Props {
   conversationId: string;
@@ -35,6 +41,8 @@ interface Props {
   onTyping?: () => void;
   /** Called when the user stops typing or sends. */
   onTypingStop?: () => void;
+  /** Invoked when the user runs a slash command — host wires this to actions. */
+  onSlashCommand?: (kind: SlashKind, argument: string) => void;
 }
 
 export function Composer({
@@ -49,16 +57,39 @@ export function Composer({
   typing,
   onTyping,
   onTypingStop,
+  onSlashCommand,
 }: Props) {
   const [text, setText] = useState('');
   const [imageMode, setImageMode] = useState(false);
   const [silentMode, setSilentMode] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [recording, setRecording] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
   const recognitionRef = useRef<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const { upload, uploading } = useFileUpload(conversationId);
+
+  // ---------- Slash command autocomplete ----------
+  // The dropdown is open whenever the input starts with `/` and we have at
+  // least one matching command. Selection is bounded to the visible list.
+  const slashParse = parseSlashInput(text);
+  const slashMatches: SlashCommand[] = slashParse
+    ? matchSlashCommands(slashParse.query)
+    : [];
+  const slashOpen = !!slashParse && slashMatches.length > 0 && !imageMode;
+
+  // Reset selection when matches list shrinks/changes.
+  useEffect(() => {
+    if (slashIndex > slashMatches.length - 1) setSlashIndex(0);
+  }, [slashMatches.length, slashIndex]);
+
+  function clearComposer() {
+    setText('');
+    setAttachments([]);
+    setImageMode(false);
+    if (taRef.current) taRef.current.style.height = 'auto';
+  }
 
   // If silent toggle is hidden (e.g., presence dropped), reset silent mode.
   useEffect(() => {
@@ -93,8 +124,21 @@ export function Composer({
 
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-    const trimmed = text.trim();
     if (disabled) return;
+
+    // Slash command path — intercept before we send anything as a message.
+    if (slashParse) {
+      const target = slashOpen ? slashMatches[slashIndex] : slashParse.command;
+      if (target) {
+        runSlash(target, slashParse.argument);
+        return;
+      }
+      // Unknown command typed in full — fall through and treat as plain text
+      // so users can still send messages that start with "/" if they really
+      // want (e.g. "/path/to/file"). Most teams prefer this over a hard error.
+    }
+
+    const trimmed = text.trim();
     // Image mode requires text (the prompt). Otherwise text or attachments is enough.
     if (imageMode) {
       if (!trimmed) return;
@@ -122,6 +166,21 @@ export function Composer({
   // pulse when input clears, on send, or on unmount.
   const typingPulseRef = useRef<number | null>(null);
   const lastTypingSentRef = useRef(0);
+
+  function runSlash(cmd: SlashCommand, argument = '') {
+    if (!onSlashCommand) {
+      toast({ title: 'Command not available here', variant: 'error' });
+      return;
+    }
+    onSlashCommand(cmd.kind, argument.trim());
+    clearComposer();
+    if (typingPulseRef.current) {
+      window.clearTimeout(typingPulseRef.current);
+      typingPulseRef.current = null;
+    }
+    onTypingStop?.();
+    lastTypingSentRef.current = 0;
+  }
 
   function pulseTyping() {
     if (!onTyping) return;
@@ -207,7 +266,51 @@ export function Composer({
 
   return (
     <div className="px-6 lg:px-8 pb-6 pt-2">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-3xl mx-auto relative">
+        <AnimatePresence>
+          {slashOpen && (
+            <motion.div
+              key="slash-menu"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.15 }}
+              className="absolute bottom-full left-0 right-0 mb-1.5 surface rounded-lg shadow-lg p-1 max-h-[40vh] overflow-y-auto z-20"
+            >
+              {slashMatches.map((cmd, i) => (
+                <button
+                  key={cmd.name}
+                  type="button"
+                  onMouseEnter={() => setSlashIndex(i)}
+                  onMouseDown={(e) => {
+                    // Use mouseDown so we fire before the textarea blurs.
+                    e.preventDefault();
+                    runSlash(cmd, slashParse?.argument ?? '');
+                  }}
+                  className={cn(
+                    'w-full text-left px-2.5 py-1.5 rounded-md flex items-center gap-3 transition',
+                    i === slashIndex ? 'bg-muted' : 'hover:bg-muted/60',
+                  )}
+                >
+                  <code className="text-[12px] font-mono text-fg shrink-0">
+                    {cmd.label}
+                    {cmd.argHint && (
+                      <span className="text-faint font-normal ml-1">{cmd.argHint}</span>
+                    )}
+                  </code>
+                  <span className="text-[11.5px] text-subtle truncate">{cmd.description}</span>
+                </button>
+              ))}
+              <div className="border-t border-hairline mt-1 pt-1 px-2.5 pb-1 text-[10.5px] text-faint flex items-center gap-3">
+                <span><span className="kbd">↑</span> <span className="kbd">↓</span> select</span>
+                <span><span className="kbd">↵</span> run</span>
+                <span><span className="kbd">Tab</span> autocomplete</span>
+                <span><span className="kbd">Esc</span> clear</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence>
           {typing && typing.length > 0 && (
             <motion.div
@@ -316,12 +419,56 @@ export function Composer({
           value={text}
           onChange={autosize}
           onKeyDown={(e) => {
+            // Slash autocomplete navigation takes priority when the menu is open.
+            if (slashOpen) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSlashIndex((i) => Math.min(slashMatches.length - 1, i + 1));
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSlashIndex((i) => Math.max(0, i - 1));
+                return;
+              }
+              if (e.key === 'Tab') {
+                e.preventDefault();
+                const m = slashMatches[slashIndex];
+                if (m) {
+                  // Tab autocompletes the command name and primes for argument.
+                  const next = `/${m.name}${m.argHint ? ' ' : ''}`;
+                  setText(next);
+                  if (taRef.current) {
+                    taRef.current.value = next;
+                    taRef.current.style.height = 'auto';
+                  }
+                }
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                clearComposer();
+                return;
+              }
+            }
+
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               handleSubmit();
+              return;
+            }
+            if (e.key === 'Escape' && text.length > 0) {
+              e.preventDefault();
+              clearComposer();
             }
           }}
-          placeholder={imageMode ? 'A photograph of…' : 'Ask anything'}
+          placeholder={
+            imageMode
+              ? 'A photograph of…'
+              : showSilentToggle
+              ? 'Ask anything, or / for commands'
+              : 'Ask anything, or /'
+          }
           rows={1}
           className="w-full resize-none bg-transparent border-0 outline-none text-[15px] py-1.5 px-1 max-h-[200px] min-h-[28px] placeholder:text-faint leading-relaxed"
           disabled={disabled}
