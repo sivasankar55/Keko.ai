@@ -238,6 +238,9 @@ export function ChatShell({
             initialMessages={initialMessages}
             user={user}
             customPersonas={customPersonas}
+            onShare={(id) => setShareConvId(id)}
+            onExport={handleExport}
+            onNewWithPersona={handleNewConversation}
           />
         ) : (
           <EmptyState
