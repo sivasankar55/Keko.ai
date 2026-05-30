@@ -305,3 +305,12 @@ textarea {
   place-items: center;
   border: 2px dashed hsl(var(--accent) / 0.8);
 }
+
+/* Search result snippet highlights — server returns ts_headline output
+   wrapped in <mark> tags. Themed to read on both bone and obsidian. */
+.search-snippet mark {
+  background: hsl(var(--accent) / 0.18);
+  color: hsl(var(--fg));
+  border-radius: 3px;
+  padding: 0 2px;
+}
