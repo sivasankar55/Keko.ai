@@ -202,8 +202,11 @@ export async function POST(request: NextRequest) {
       : 'Describe and analyze the attached file(s) in detail.';
 
   // RAG: retrieve top-k chunks scoped to this conversation if any documents exist.
+  // We over-fetch (top 12 by cosine) then keyword-rerank on top, keeping the
+  // best 6 for the prompt. Free, no extra API call, noticeably better recall
+  // when the user's wording differs slightly from the source passage.
   let ragContext = '';
-  let ragSources: { document_name: string; chunk_index: number }[] = [];
+  let citedChunks: Array<{ id: string; document_name: string; chunk_index: number; document_id: string }> = [];
   try {
     const { count } = await supabase
       .from('rag_documents')
@@ -217,24 +220,28 @@ export async function POST(request: NextRequest) {
       const { data: matches } = await supabase.rpc('match_rag_chunks', {
         p_user_id: user.id,
         p_query_embedding: queryEmbedding as any,
-        p_match_count: 6,
+        p_match_count: 12,
         p_conversation_id: conversationId,
       });
       if (matches && matches.length > 0) {
-        const blocks = matches
-          .filter((m: any) => m.similarity > 0.55)
-          .map(
-            (m: any, i: number) =>
-              `[${i + 1}] (${m.document_name}, section ${m.chunk_index + 1})\n${m.content}`,
-          );
+        const reranked = rerankChunks(message, matches as RagMatch[])
+          .filter((m) => m.similarity > 0.5)
+          .slice(0, 6);
+        const blocks = reranked.map(
+          (m, i) =>
+            `[${i + 1}] (${m.document_name}, section ${m.chunk_index + 1})\n${m.content}`,
+        );
         if (blocks.length > 0) {
           ragContext =
             '\n\n--- DOCUMENT CONTEXT ---\n' +
-            'Use the following excerpts from the user\'s uploaded documents to answer their question. ' +
-            'Cite passages by their bracket number when relevant. If the documents don\'t answer the question, say so plainly.\n\n' +
+            "Use the following excerpts from the user's uploaded documents to answer their question. " +
+            'Cite passages by their bracket number when relevant — for example "[1]" or "[2, 3]". ' +
+            "If the documents don't answer the question, say so plainly and answer from general knowledge.\n\n" +
             blocks.join('\n\n---\n\n') +
             '\n--- END OF DOCUMENT CONTEXT ---\n\n';
-          ragSources = matches.map((m: any) => ({
+          citedChunks = reranked.map((m) => ({
+            id: m.id,
+            document_id: m.document_id,
             document_name: m.document_name,
             chunk_index: m.chunk_index,
           }));
@@ -249,7 +256,6 @@ export async function POST(request: NextRequest) {
 
   const finalPromptText = ragContext + promptText;
   const userParts: Part[] = [{ text: finalPromptText }, ...attachmentParts];
-  void ragSources;
 
   // Stream the response — provider-aware.
   // If user picked a Groq model on this conversation, route there.
@@ -350,12 +356,28 @@ export async function POST(request: NextRequest) {
 
       // Persist assistant message + auto-title
       try {
-        await supabase.from('messages').insert({
+        const wantsCitations =
+          citedChunks.length > 0 && /\[\d+/.test(fullText);
+        const cited = wantsCitations ? filterCitedChunks(citedChunks, fullText) : null;
+
+        // First try with cited_chunks; if that fails (older DB without the
+        // column) fall back to the legacy insert.
+        const { error: insertErr } = await supabase.from('messages').insert({
           conversation_id: conversationId,
           user_id: user.id,
           role: 'assistant',
           content: fullText || '(no response)',
+          cited_chunks: cited,
         });
+
+        if (insertErr && /cited_chunks/i.test(insertErr.message)) {
+          await supabase.from('messages').insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: 'assistant',
+            content: fullText || '(no response)',
+          });
+        }
 
         // Auto-title the first exchange
         if ((prior?.length ?? 0) === 0 && conv.title.startsWith('New chat')) {
@@ -387,6 +409,71 @@ function generateTitle(message: string) {
   if (trimmed.length <= 60) return trimmed;
   return trimmed.slice(0, 57) + '...';
 }
+
+interface RagMatch {
+  id: string;
+  document_id: string;
+  document_name: string;
+  chunk_index: number;
+  content: string;
+  similarity: number;
+}
+
+interface CitedChunk {
+  id: string;
+  document_id: string;
+  document_name: string;
+  chunk_index: number;
+}
+
+/**
+ * Light keyword reranker. Boosts matches that contain the user's content
+ * words, breaking the ties between similar cosine scores. Cheap, no API.
+ */
+function rerankChunks(query: string, matches: RagMatch[]): RagMatch[] {
+  const tokens = (query.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])
+    .filter((t) => !STOP_WORDS.has(t));
+  if (tokens.length === 0) return [...matches];
+
+  return [...matches].sort((a, b) => {
+    const aScore = a.similarity + keywordOverlap(tokens, a.content) * 0.05;
+    const bScore = b.similarity + keywordOverlap(tokens, b.content) * 0.05;
+    return bScore - aScore;
+  });
+}
+
+function keywordOverlap(tokens: string[], content: string): number {
+  const lower = content.toLowerCase();
+  let hits = 0;
+  for (const t of tokens) if (lower.includes(t)) hits++;
+  return hits;
+}
+
+/**
+ * Inspect the streamed reply for [n] tokens (e.g. "[1]", "[2, 3]") and
+ * return only the chunks that were actually cited. Keeps the persisted
+ * citation list tight so the bubble doesn't show stale references.
+ */
+function filterCitedChunks(chunks: CitedChunk[], text: string): CitedChunk[] {
+  const cited = new Set<number>();
+  const re = /\[([\d,\s]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    for (const part of m[1].split(',')) {
+      const n = parseInt(part.trim(), 10);
+      if (Number.isFinite(n) && n >= 1 && n <= chunks.length) cited.add(n);
+    }
+  }
+  if (cited.size === 0) return chunks;
+  return chunks.filter((_, i) => cited.has(i + 1));
+}
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'has', 'had',
+  'his', 'her', 'with', 'this', 'that', 'from', 'they', 'them', 'have', 'what',
+  'when', 'where', 'who', 'how', 'why', 'about', 'into', 'over', 'than', 'then',
+  'there', 'these', 'those', 'will', 'would', 'should', 'could', 'one', 'two',
+]);
 
 /**
  * Extract user IDs out of @[Name](uuid) tokens in the message body.

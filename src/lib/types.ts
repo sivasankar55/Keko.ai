@@ -35,6 +35,13 @@ export interface Message {
   silent?: boolean;
   author_display_name?: string | null;
   author_avatar_url?: string | null;
+  /** Snapshot of RAG chunks the assistant cited, in citation order. */
+  cited_chunks?: Array<{
+    id: string;
+    document_id: string;
+    document_name: string;
+    chunk_index: number;
+  }> | null;
 }
 
 export interface Attachment {

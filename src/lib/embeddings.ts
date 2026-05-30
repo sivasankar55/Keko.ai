@@ -29,13 +29,15 @@ export async function embedBatch(texts: string[]) {
 }
 
 /**
- * Split a long text into ~chunkSize-character chunks with overlap.
- * Tries to break on paragraph or sentence boundaries when possible.
+ * Split a long text into ~chunkSize-character chunks with overlap. Tries to
+ * break on paragraph or sentence boundaries when possible. The overlap is
+ * generous (~250 chars) so a sentence split across boundaries is still
+ * findable on either side.
  */
 export function chunkText(
   text: string,
-  chunkSize = 1200,
-  overlap = 200,
+  chunkSize = 1000,
+  overlap = 250,
 ): string[] {
   const cleaned = text.replace(/\u0000/g, '').replace(/\r\n/g, '\n').trim();
   if (cleaned.length <= chunkSize) return cleaned.length > 0 ? [cleaned] : [];

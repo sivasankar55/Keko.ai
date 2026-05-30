@@ -24,6 +24,7 @@ import { cn, formatTime } from '@/lib/utils';
 import { CodeBlock } from './code-block';
 import { useTTS } from '@/lib/use-tts';
 import { MessageReactions, type ReactionAggregate } from './reactions';
+import { Citations } from './citations';
 import { parseMentionSegments } from '@/lib/mentions';
 
 // Allow class on code/pre/span so syntax highlighting can apply colors.
@@ -213,6 +214,12 @@ export function MessageBubble({
             {message.content}
           </ReactMarkdown>
         </div>
+      )}
+
+      {/* Citations: tiny [n] chips for any RAG chunks the assistant cited.
+          Click → popover with the underlying passage. */}
+      {!isStreaming && !isUser && message.cited_chunks && message.cited_chunks.length > 0 && (
+        <Citations citations={message.cited_chunks} />
       )}
 
       {/* Hover actions */}

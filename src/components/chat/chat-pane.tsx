@@ -912,6 +912,9 @@ export function ChatPane({
         open={docsOpen}
         onClose={() => setDocsOpen(false)}
         conversationId={conversation.id}
+        onAskAbout={(name) => {
+          setInitialPrompt(`Summarize the key points of "${name}" and tell me what you can answer about it.`);
+        }}
       />
 
       <InviteModal
