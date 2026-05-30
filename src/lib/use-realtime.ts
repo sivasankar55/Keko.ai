@@ -11,6 +11,13 @@ export interface PresenceUser {
   avatar_url: string | null;
 }
 
+export interface TypingUser {
+  user_id: string;
+  display_name: string;
+  /** Local clock when the typing event was received, used to expire stale ones. */
+  receivedAt: number;
+}
+
 interface Opts {
   conversationId: string;
   selfUserId: string;
@@ -39,6 +46,7 @@ export function useRealtimeChannel({
   onIncomingMessage,
 }: Opts) {
   const [presence, setPresence] = useState<PresenceUser[]>([]);
+  const [typing, setTyping] = useState<TypingUser[]>([]);
   const handlerRef = useRef(onIncomingMessage);
   handlerRef.current = onIncomingMessage;
 
@@ -97,6 +105,26 @@ export function useRealtimeChannel({
       refreshAndDispatch();
     });
 
+    // Typing broadcasts from peers — Slack/iMessage style indicator.
+    // Each event refreshes the entry's timestamp; entries older than
+    // ~3.5s are pruned (the sweep below).
+    channel.on('broadcast', { event: 'typing' }, (payload) => {
+      const data = payload?.payload as { user_id?: string; display_name?: string } | undefined;
+      if (!data?.user_id || data.user_id === selfUserId) return;
+      const display = data.display_name ?? 'Someone';
+      const now = Date.now();
+      setTyping((prev) => {
+        const others = prev.filter((t) => t.user_id !== data.user_id);
+        return [...others, { user_id: data.user_id!, display_name: display, receivedAt: now }];
+      });
+    });
+
+    channel.on('broadcast', { event: 'typing_stop' }, (payload) => {
+      const data = payload?.payload as { user_id?: string } | undefined;
+      if (!data?.user_id) return;
+      setTyping((prev) => prev.filter((t) => t.user_id !== data.user_id));
+    });
+
     channel.on('presence', { event: 'sync' }, () => {
       const state = channel.presenceState() as Record<string, PresenceUser[]>;
       const users: PresenceUser[] = [];
@@ -132,6 +160,16 @@ export function useRealtimeChannel({
       refreshAndDispatch();
     }, 5000);
 
+    // Expire stale typing entries every 1s. We treat ~3.5s of silence as
+    // "stopped typing"; the sender re-broadcasts every 2s while typing.
+    const typingSweep = setInterval(() => {
+      const cutoff = Date.now() - 3500;
+      setTyping((prev) => {
+        const filtered = prev.filter((t) => t.receivedAt > cutoff);
+        return filtered.length === prev.length ? prev : filtered;
+      });
+    }, 1000);
+
     // Also refresh when the tab regains focus, so a returning user catches up
     // without waiting for the next poll tick.
     const onFocus = () => refreshAndDispatch();
@@ -140,6 +178,7 @@ export function useRealtimeChannel({
 
     return () => {
       clearInterval(pollHandle);
+      clearInterval(typingSweep);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onFocus);
       subscribedRef.current = false;
@@ -157,5 +196,27 @@ export function useRealtimeChannel({
     ch.send({ type: 'broadcast', event: 'message_sent', payload: {} });
   }
 
-  return { presence, notifyPeers };
+  // Broadcast a "typing" pulse. Callers should debounce — typically called
+  // every 2s while the user is actively typing, plus once on stop.
+  function sendTyping() {
+    const ch = channelRef.current;
+    if (!ch || !subscribedRef.current) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { user_id: selfUserId, display_name: selfDisplayName },
+    });
+  }
+
+  function sendTypingStop() {
+    const ch = channelRef.current;
+    if (!ch || !subscribedRef.current) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'typing_stop',
+      payload: { user_id: selfUserId },
+    });
+  }
+
+  return { presence, typing, notifyPeers, sendTyping, sendTypingStop };
 }
