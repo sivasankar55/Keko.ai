@@ -53,6 +53,7 @@ export function ChatPane({
   const [docCount, setDocCount] = useState(0);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [reactions, setReactions] = useState<Record<string, ReactionAggregate[]>>({});
+  const [members, setMembers] = useState<Array<{ id: string; display_name: string; avatar_url: string | null }>>([]);
   const { upload } = useFileUpload(conversation.id);
 
   // Realtime: append messages from other clients (de-dup by id), track presence.
@@ -95,6 +96,59 @@ export function ChatPane({
   useEffect(() => {
     setReactions({});
   }, [conversation.id]);
+
+  // Fetch the conversation's members so the composer can offer @-autocomplete.
+  // Excludes the current user — you can't mention yourself.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/conversations/${conversation.id}/members`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const all = (j.members ?? []) as Array<{
+          id: string;
+          display_name: string;
+          avatar_url: string | null;
+        }>;
+        setMembers(all.filter((m) => m.id !== user.id));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation.id, user.id]);
+
+  // Mark the conversation read whenever it becomes active or a new message
+  // arrives while the tab is focused. Best-effort; failure is silent.
+  async function markRead() {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    try {
+      await fetch(`/api/conversations/${conversation.id}/read`, { method: 'POST' });
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    markRead();
+    const onFocus = () => markRead();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation.id]);
+
+  // When a new message arrives and the user is at-or-near the bottom (autoScroll
+  // is true), bump the read cursor so the badge clears immediately.
+  useEffect(() => {
+    if (autoScroll && messages.length > 0) {
+      markRead();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
 
   // Initial bulk-fetch: pull reactions for every saved message in this conv
   // in a single call, so chips appear immediately on load.
@@ -851,6 +905,7 @@ export function ChatPane({
         onTyping={sendTyping}
         onTypingStop={sendTypingStop}
         onSlashCommand={handleSlashCommand}
+        members={members}
       />
 
       <DocumentsModal

@@ -24,6 +24,7 @@ import { cn, formatTime } from '@/lib/utils';
 import { CodeBlock } from './code-block';
 import { useTTS } from '@/lib/use-tts';
 import { MessageReactions, type ReactionAggregate } from './reactions';
+import { parseMentionSegments } from '@/lib/mentions';
 
 // Allow class on code/pre/span so syntax highlighting can apply colors.
 const sanitizeSchema = {
@@ -187,7 +188,7 @@ export function MessageBubble({
               : 'text-fg',
           )}
         >
-          {message.content}
+          {renderUserContent(message.content, user.id)}
         </p>
       ) : (
         <div className="prose-luxe">
@@ -299,6 +300,28 @@ function ActionBtn({
       <span className="hidden sm:inline">{label}</span>
     </button>
   );
+}
+
+function renderUserContent(content: string, selfUserId?: string) {
+  const segs = parseMentionSegments(content);
+  return segs.map((s, i) => {
+    if (s.type === 'text') return <span key={i}>{s.value}</span>;
+    const mine = s.userId === selfUserId;
+    return (
+      <span
+        key={i}
+        className={cn(
+          'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[13.5px] align-baseline',
+          mine
+            ? 'bg-accent/15 text-fg ring-1 ring-accent/30 font-medium'
+            : 'bg-muted text-fg',
+        )}
+        title={`@${s.displayName}`}
+      >
+        @{s.displayName}
+      </span>
+    );
+  });
 }
 
 function Attachment({ a }: { a: NonNullable<Message['attachments']>[number] }) {

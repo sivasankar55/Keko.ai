@@ -126,16 +126,39 @@ export async function POST(request: NextRequest) {
 
   // Persist the user message (use a placeholder if message is empty so DB is happy and UI renders)
   const persistedContent = message.trim().length > 0 ? message : '(attachment)';
-  const { error: insertErr } = await supabase.from('messages').insert({
-    conversation_id: conversationId,
-    user_id: user.id,
-    role: 'user',
-    content: persistedContent,
-    attachments: storedAttachments.length ? storedAttachments : null,
-    silent: silent ?? false,
-  });
+  const { data: insertedMsg, error: insertErr } = await supabase
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      user_id: user.id,
+      role: 'user',
+      content: persistedContent,
+      attachments: storedAttachments.length ? storedAttachments : null,
+      silent: silent ?? false,
+    })
+    .select('id')
+    .single();
   if (insertErr) {
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
+  }
+
+  // Parse @[Name](uuid) mentions out of the message text and persist them
+  // as message_mentions rows. Failure here is non-fatal — we don't want to
+  // break send if the table is missing or RLS rejects.
+  if (insertedMsg?.id) {
+    const mentionedUserIds = extractMentions(persistedContent);
+    if (mentionedUserIds.length > 0) {
+      try {
+        await supabase.from('message_mentions').insert(
+          mentionedUserIds.map((uid) => ({
+            message_id: insertedMsg.id,
+            mentioned_user_id: uid,
+          })),
+        );
+      } catch {
+        // ignore — mentions are best-effort
+      }
+    }
   }
 
   // Silent mode: save the user's message but skip AI generation entirely.
@@ -363,4 +386,18 @@ function generateTitle(message: string) {
   const trimmed = message.replace(/\s+/g, ' ').trim();
   if (trimmed.length <= 60) return trimmed;
   return trimmed.slice(0, 57) + '...';
+}
+
+/**
+ * Extract user IDs out of @[Name](uuid) tokens in the message body.
+ * Deduplicates and filters obvious garbage.
+ */
+function extractMentions(content: string): string[] {
+  const re = /@\[([^\]]+)\]\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/gi;
+  const ids = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    ids.add(m[2].toLowerCase());
+  }
+  return Array.from(ids);
 }
