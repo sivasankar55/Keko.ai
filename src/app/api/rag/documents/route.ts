@@ -4,16 +4,21 @@ import { chunkText, embedBatch } from '@/lib/embeddings';
 import { genAI } from '@/lib/ai';
 
 /**
- * Lazily import pdf-parse so its module-init side effects (it tries to
- * open a test PDF on first load) only run when we actually need it.
+ * Lazily import pdf-parse so its module-init side effects only run when we
+ * actually need it. pdf-parse v2 exposes a PDFParse class (no default export
+ * function like v1) — instantiate it, call getText(), then destroy().
  */
 async function extractPdfText(buf: Buffer): Promise<string> {
   const mod: any = await import('pdf-parse');
-  const pdfParse = (mod.default ?? mod) as (
-    data: Buffer,
-  ) => Promise<{ text: string; numpages: number }>;
-  const parsed = await pdfParse(buf);
-  return parsed.text ?? '';
+  const PDFParse = mod.PDFParse ?? mod.default?.PDFParse;
+  if (!PDFParse) throw new Error('pdf-parse: PDFParse export not found');
+  const parser = new PDFParse({ data: new Uint8Array(buf) });
+  try {
+    const result = await parser.getText();
+    return result?.text ?? '';
+  } finally {
+    await parser.destroy?.();
+  }
 }
 
 export const runtime = 'nodejs';

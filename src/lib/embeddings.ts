@@ -1,6 +1,10 @@
 import { genAI } from './ai';
 
-const EMBED_MODEL = 'text-embedding-004';
+// Google retired text-embedding-004 on the v1beta endpoint. gemini-embedding-001
+// is the current model; it defaults to 3072 dims but supports reducing the
+// output to 768 to match our existing vector(768) column.
+const EMBED_MODEL = 'gemini-embedding-001';
+const EMBED_DIMS = 768;
 
 /**
  * Generate a 768-dim embedding for a piece of text via Gemini.
@@ -11,7 +15,8 @@ export async function embed(text: string, taskType: 'RETRIEVAL_DOCUMENT' | 'RETR
   const res = await model.embedContent({
     content: { parts: [{ text }], role: 'user' },
     taskType: taskType as any,
-  });
+    outputDimensionality: EMBED_DIMS,
+  } as any);
   return res.embedding.values;
 }
 
