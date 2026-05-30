@@ -33,6 +33,8 @@ interface Props {
   conversations: Conversation[];
   customPersonas: Persona[];
   activeId: string | null;
+  /** Per-conversation unread + mention counts driving the sidebar badges. */
+  unread?: Record<string, { unread: number; mentions: number }>;
   onNew: (personaId: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
@@ -53,6 +55,7 @@ export function Sidebar({
   conversations,
   customPersonas,
   activeId,
+  unread,
   onNew,
   onDelete,
   onRename,
@@ -184,6 +187,9 @@ export function Sidebar({
                 const isEditing = editingId === c.id;
                 const isPinned = !!c.pinned_at;
                 const isOwner = c.user_id === selfUserId;
+                const u = unread?.[c.id];
+                const hasUnread = u && u.unread > 0;
+                const hasMention = u && u.mentions > 0;
                 return (
                   <div key={c.id} className="relative group">
                     {isEditing ? (
@@ -214,13 +220,36 @@ export function Sidebar({
                           'block rounded-md px-3 py-1.5 transition relative',
                           isActive
                             ? 'bg-muted text-fg'
+                            : hasUnread
+                            ? 'text-fg hover:bg-muted/60'
                             : 'text-subtle hover:bg-muted/60 hover:text-fg',
                         )}
                       >
-                        <p className="text-[13px] truncate leading-snug flex items-center gap-1.5">
+                        <p
+                          className={cn(
+                            'text-[13px] truncate leading-snug flex items-center gap-1.5',
+                            hasUnread && !isActive && 'font-medium',
+                          )}
+                        >
                           <span className="opacity-70">{persona.emoji}</span>
                           <span className="truncate">{truncate(c.title, 26)}</span>
-                          {isPinned && (
+                          {hasMention && !isActive && (
+                            <span
+                              className="ml-auto inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-accent text-[10px] font-medium text-accent-fg shrink-0"
+                              title={`${u!.mentions} mention${u!.mentions === 1 ? '' : 's'}`}
+                            >
+                              @
+                            </span>
+                          )}
+                          {hasUnread && !hasMention && !isActive && (
+                            <span
+                              className="ml-auto inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-fg/80 text-[10px] font-medium text-bg shrink-0"
+                              title={`${u!.unread} unread`}
+                            >
+                              {u!.unread > 9 ? '9+' : u!.unread}
+                            </span>
+                          )}
+                          {isPinned && !hasUnread && !hasMention && (
                             <Pin className="h-2.5 w-2.5 text-faint shrink-0 ml-auto" />
                           )}
                         </p>

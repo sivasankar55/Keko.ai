@@ -24,6 +24,17 @@ import {
   type SlashCommand,
   type SlashKind,
 } from '@/lib/slash-commands';
+import {
+  applyMention,
+  detectMentionTrigger,
+  type MentionContext,
+} from '@/lib/mentions';
+
+export interface ComposerMember {
+  id: string;
+  display_name: string;
+  avatar_url: string | null;
+}
 
 interface Props {
   conversationId: string;
@@ -43,6 +54,8 @@ interface Props {
   onTypingStop?: () => void;
   /** Invoked when the user runs a slash command — host wires this to actions. */
   onSlashCommand?: (kind: SlashKind, argument: string) => void;
+  /** Conversation members for @-autocomplete (excludes the current user). */
+  members?: ComposerMember[];
 }
 
 export function Composer({
@@ -58,6 +71,7 @@ export function Composer({
   onTyping,
   onTypingStop,
   onSlashCommand,
+  members,
 }: Props) {
   const [text, setText] = useState('');
   const [imageMode, setImageMode] = useState(false);
@@ -65,10 +79,41 @@ export function Composer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [recording, setRecording] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [mentionCtx, setMentionCtx] = useState<MentionContext | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const recognitionRef = useRef<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const { upload, uploading } = useFileUpload(conversationId);
+
+  // Filter members by the current trigger query, ignoring the case.
+  const mentionMatches = (mentionCtx && members
+    ? members.filter((m) =>
+        m.display_name.toLowerCase().includes(mentionCtx.query.toLowerCase()),
+      )
+    : []
+  ).slice(0, 8);
+  const mentionOpen = !!mentionCtx && mentionMatches.length > 0 && !imageMode;
+
+  useEffect(() => {
+    if (mentionIndex > mentionMatches.length - 1) setMentionIndex(0);
+  }, [mentionMatches.length, mentionIndex]);
+
+  function commitMention(member: ComposerMember) {
+    if (!mentionCtx) return;
+    const { text: nextText, caret } = applyMention(text, mentionCtx, member);
+    setText(nextText);
+    setMentionCtx(null);
+    // Restore caret on the next paint after React updates the value.
+    requestAnimationFrame(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+        taRef.current.setSelectionRange(caret, caret);
+        taRef.current.style.height = 'auto';
+        taRef.current.style.height = Math.min(taRef.current.scrollHeight, 200) + 'px';
+      }
+    });
+  }
 
   // ---------- Slash command autocomplete ----------
   // The dropdown is open whenever the input starts with `/` and we have at
@@ -214,6 +259,13 @@ export function Composer({
     setText(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+
+    // Detect / refresh @-mention trigger.
+    if (members && members.length > 0) {
+      const caret = e.target.selectionStart ?? e.target.value.length;
+      setMentionCtx(detectMentionTrigger(e.target.value, caret));
+    }
+
     if (e.target.value.trim().length > 0) {
       pulseTyping();
     } else if (onTypingStop) {
@@ -307,6 +359,46 @@ export function Composer({
                 <span><span className="kbd">Tab</span> autocomplete</span>
                 <span><span className="kbd">Esc</span> clear</span>
               </div>
+            </motion.div>
+          )}
+
+          {mentionOpen && (
+            <motion.div
+              key="mention-menu"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.15 }}
+              className="absolute bottom-full left-0 right-0 mb-1.5 surface rounded-lg shadow-lg p-1 max-h-[40vh] overflow-y-auto z-20"
+            >
+              <p className="px-2.5 pt-1 pb-1 text-[10px] uppercase tracking-wider text-faint font-medium">
+                Mention someone
+              </p>
+              {mentionMatches.map((m, i) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onMouseEnter={() => setMentionIndex(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    commitMention(m);
+                  }}
+                  className={cn(
+                    'w-full text-left px-2.5 py-1.5 rounded-md flex items-center gap-2.5 transition',
+                    i === mentionIndex ? 'bg-muted' : 'hover:bg-muted/60',
+                  )}
+                >
+                  <span className="h-6 w-6 rounded-full bg-muted overflow-hidden shrink-0 grid place-items-center text-[10px] font-medium">
+                    {m.avatar_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={m.avatar_url} alt="" className="h-6 w-6 object-cover" />
+                    ) : (
+                      m.display_name.charAt(0).toUpperCase()
+                    )}
+                  </span>
+                  <span className="text-[13px] truncate">{m.display_name}</span>
+                </button>
+              ))}
             </motion.div>
           )}
         </AnimatePresence>
@@ -419,7 +511,32 @@ export function Composer({
           value={text}
           onChange={autosize}
           onKeyDown={(e) => {
-            // Slash autocomplete navigation takes priority when the menu is open.
+            // Mention autocomplete navigation takes priority.
+            if (mentionOpen) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setMentionIndex((i) => Math.min(mentionMatches.length - 1, i + 1));
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setMentionIndex((i) => Math.max(0, i - 1));
+                return;
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                const m = mentionMatches[mentionIndex];
+                if (m) commitMention(m);
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setMentionCtx(null);
+                return;
+              }
+            }
+
+            // Slash autocomplete navigation.
             if (slashOpen) {
               if (e.key === 'ArrowDown') {
                 e.preventDefault();

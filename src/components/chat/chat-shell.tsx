@@ -37,10 +37,62 @@ export function ChatShell({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [personaModalOpen, setPersonaModalOpen] = useState(false);
   const [shareConvId, setShareConvId] = useState<string | null>(null);
+  const [unread, setUnread] = useState<Record<string, { unread: number; mentions: number }>>({});
 
   useEffect(() => {
     setConversations(initialConvs);
   }, [initialConvs]);
+
+  // Poll the unread summary endpoint. Cheap (one RPC call). Refreshes on
+  // initial mount, every 30s, and when the tab regains focus or active
+  // conversation changes (to clear the badge for the one we just opened).
+  async function refreshUnread() {
+    try {
+      const res = await fetch('/api/conversations/unread', { cache: 'no-store' });
+      if (!res.ok) return;
+      const j = await res.json();
+      const map: Record<string, { unread: number; mentions: number }> = {};
+      for (const row of (j.summary ?? []) as Array<{
+        conversation_id: string;
+        unread_count: number;
+        mention_count: number;
+      }>) {
+        map[row.conversation_id] = {
+          unread: row.unread_count ?? 0,
+          mentions: row.mention_count ?? 0,
+        };
+      }
+      setUnread(map);
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    refreshUnread();
+    const handle = setInterval(refreshUnread, 30000);
+    const onFocus = () => refreshUnread();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(handle);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, []);
+
+  // Whenever the active conversation changes, clear its row in our local
+  // unread map. The chat-pane separately POSTs /read so the server matches.
+  useEffect(() => {
+    if (activeConversationId) {
+      setUnread((u) => {
+        if (!u[activeConversationId]) return u;
+        const next = { ...u };
+        delete next[activeConversationId];
+        return next;
+      });
+    }
+  }, [activeConversationId]);
 
   // Note: we intentionally do NOT sync customPersonas from initialCustom on
   // re-renders. The page is `force-dynamic` and any router.refresh() ships a
@@ -181,6 +233,7 @@ export function ChatShell({
           conversations={conversations}
           customPersonas={customPersonas}
           activeId={activeConversationId}
+          unread={unread}
           onNew={handleNewConversation}
           onDelete={handleDelete}
           onRename={handleRename}
@@ -215,6 +268,7 @@ export function ChatShell({
                 conversations={conversations}
                 customPersonas={customPersonas}
                 activeId={activeConversationId}
+                unread={unread}
                 onNew={handleNewConversation}
                 onDelete={handleDelete}
                 onRename={handleRename}
