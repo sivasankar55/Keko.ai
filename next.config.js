@@ -13,6 +13,12 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
+  // pdf-parse ships a CommonJS module with a debug-mode side effect that
+  // tries to read a test PDF when bundled. Mark it as an external server
+  // package so Next leaves it alone and Node loads it normally at runtime.
+  experimental: {
+    serverComponentsExternalPackages: ['pdf-parse'],
+  },
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '**.supabase.co' },
