@@ -1,10 +1,21 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Plus, MessageSquare, Sun, Moon, Sparkles, X, Loader2 } from 'lucide-react';
+import {
+  Search,
+  Plus,
+  MessageSquare,
+  Sun,
+  Moon,
+  Sparkles,
+  X,
+  Loader2,
+  Paperclip,
+  GitBranch,
+  CalendarDays,
+} from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { cn } from '@/lib/utils';
 import type { Conversation, Persona } from '@/lib/types';
@@ -14,8 +25,11 @@ interface SearchResult {
   id: string;
   title?: string;
   persona_id?: string;
+  /** May contain inline <mark> tags from the server. */
   snippet?: string;
 }
+
+type DateBucket = 'any' | '7d' | '30d' | '90d';
 
 interface Props {
   open: boolean;
@@ -42,16 +56,29 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Filters
+  const [personaFilter, setPersonaFilter] = useState<string | null>(null);
+  const [dateBucket, setDateBucket] = useState<DateBucket>('any');
+  const [hasAttachments, setHasAttachments] = useState(false);
+  const [branchedOnly, setBranchedOnly] = useState(false);
+
+  const filtersActive =
+    !!personaFilter || dateBucket !== 'any' || hasAttachments || branchedOnly;
+
   useEffect(() => {
     if (open) {
       setQuery('');
       setResults([]);
       setActive(0);
+      setPersonaFilter(null);
+      setDateBucket('any');
+      setHasAttachments(false);
+      setBranchedOnly(false);
       setTimeout(() => inputRef.current?.focus(), 30);
     }
   }, [open]);
 
-  // Debounced server search
+  // Debounced server search — re-runs whenever the query or any filter changes.
   useEffect(() => {
     const q = query.trim();
     if (q.length < 2) {
@@ -63,7 +90,16 @@ export function CommandPalette({
     const ac = new AbortController();
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+        const params = new URLSearchParams({ q });
+        if (personaFilter) params.set('personaId', personaFilter);
+        if (dateBucket !== 'any') {
+          const days = dateBucket === '7d' ? 7 : dateBucket === '30d' ? 30 : 90;
+          const from = new Date(Date.now() - days * 86400000);
+          params.set('dateFrom', from.toISOString());
+        }
+        if (hasAttachments) params.set('hasAttachments', 'true');
+        if (branchedOnly) params.set('branchedOnly', 'true');
+        const res = await fetch(`/api/search?${params.toString()}`, {
           signal: ac.signal,
         });
         if (res.ok) {
@@ -80,7 +116,7 @@ export function CommandPalette({
       ac.abort();
       clearTimeout(t);
     };
-  }, [query]);
+  }, [query, personaFilter, dateBucket, hasAttachments, branchedOnly]);
 
   // Build the list of items
   const items = buildItems({
@@ -160,6 +196,45 @@ export function CommandPalette({
               </button>
             </div>
 
+            {/* Filter strip — only meaningful while the user is typing a query.
+                Filters apply server-side and re-run the FTS RPC. */}
+            {query.trim().length >= 2 && (
+              <div className="flex items-center gap-1 px-3 py-1.5 border-b border-hairline overflow-x-auto whitespace-nowrap">
+                <PersonaFilterChip
+                  conversations={conversations}
+                  personas={personas}
+                  value={personaFilter}
+                  onChange={setPersonaFilter}
+                />
+                <DateFilterChip value={dateBucket} onChange={setDateBucket} />
+                <FilterChip
+                  active={hasAttachments}
+                  onClick={() => setHasAttachments((s) => !s)}
+                  icon={<Paperclip className="h-3 w-3" />}
+                  label="Has files"
+                />
+                <FilterChip
+                  active={branchedOnly}
+                  onClick={() => setBranchedOnly((s) => !s)}
+                  icon={<GitBranch className="h-3 w-3" />}
+                  label="Branched"
+                />
+                {filtersActive && (
+                  <button
+                    onClick={() => {
+                      setPersonaFilter(null);
+                      setDateBucket('any');
+                      setHasAttachments(false);
+                      setBranchedOnly(false);
+                    }}
+                    className="ml-auto text-[10.5px] text-faint hover:text-fg transition px-2"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="max-h-[60vh] overflow-y-auto py-1.5">
               {items.length === 0 ? (
                 <p className="text-center text-[13px] text-faint py-8">No matches.</p>
@@ -193,7 +268,10 @@ interface CmdItem {
   group?: string;
   icon: React.ReactNode;
   label: string;
+  /** Plain-text hint. Rendered when `hintHtml` is absent. */
   hint?: string;
+  /** Pre-sanitized HTML hint (server-supplied snippet with <mark> tags). */
+  hintHtml?: string;
   action: () => void;
 }
 
@@ -222,7 +300,7 @@ function buildItems(args: {
         group: 'Conversations',
         icon: <MessageSquare className="h-3.5 w-3.5 text-faint" />,
         label: r.title ?? '(untitled)',
-        hint: r.snippet,
+        hintHtml: r.snippet,
         action: () => {
           router.push(`/?c=${r.id}`);
           onClose();
@@ -332,7 +410,17 @@ function Item({
       <span className="w-5 grid place-items-center shrink-0">{item.icon}</span>
       <div className="flex-1 min-w-0">
         <p className="text-[13.5px] truncate">{item.label}</p>
-        {item.hint && <p className="text-[11.5px] text-subtle truncate mt-0.5">{item.hint}</p>}
+        {item.hintHtml ? (
+          <p
+            className="text-[11.5px] text-subtle truncate mt-0.5 search-snippet"
+            // The server returns ts_headline output, which only contains
+            // <mark> tags around matches; we keep an allowlist sanitizer
+            // anyway so any external snippet source is safe.
+            dangerouslySetInnerHTML={{ __html: sanitizeSnippet(item.hintHtml) }}
+          />
+        ) : (
+          item.hint && <p className="text-[11.5px] text-subtle truncate mt-0.5">{item.hint}</p>
+        )}
       </div>
       {item.group && (
         <span className="text-[10px] uppercase tracking-wider text-faint shrink-0">
@@ -340,6 +428,208 @@ function Item({
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * Strip every tag except <mark> / </mark>. ts_headline never produces other
+ * tags, but defensive in case the fallback path or an attacker-controlled
+ * input leaks through.
+ */
+function sanitizeSnippet(html: string): string {
+  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>/g, (full, tag) => {
+    return tag.toLowerCase() === 'mark' ? full.replace(/[^<]*?(<\/?mark>)[^>]*/, '$1') : '';
+  });
+}
+
+interface FilterChipProps {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}
+
+function FilterChip({ active, onClick, icon, label }: FilterChipProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11.5px] border transition shrink-0',
+        active
+          ? 'bg-accent/10 border-accent/40 text-fg'
+          : 'border-hairline text-subtle hover:text-fg hover:border-border',
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function PersonaFilterChip({
+  conversations,
+  personas,
+  value,
+  onChange,
+}: {
+  conversations: Conversation[];
+  personas: Persona[];
+  value: string | null;
+  onChange: (v: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Personas worth showing: ones the user has actually used in a conversation.
+  const usedIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of conversations) set.add(c.persona_id);
+    return personas.filter((p) => set.has(p.id));
+  }, [conversations, personas]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  const selected = value ? personas.find((p) => p.id === value) : null;
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((s) => !s)}
+        className={cn(
+          'inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11.5px] border transition',
+          selected
+            ? 'bg-accent/10 border-accent/40 text-fg'
+            : 'border-hairline text-subtle hover:text-fg hover:border-border',
+        )}
+      >
+        <Sparkles className="h-3 w-3" />
+        <span>{selected ? selected.name : 'Any persona'}</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.14 }}
+            className="absolute left-0 top-full mt-1 surface rounded-lg shadow-lg p-1 z-30 max-h-[40vh] overflow-y-auto min-w-[180px]"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                onChange(null);
+                setOpen(false);
+              }}
+              className={cn(
+                'w-full text-left px-2.5 py-1.5 rounded-md text-[12.5px] transition',
+                value === null ? 'bg-muted text-fg' : 'text-subtle hover:bg-muted/60 hover:text-fg',
+              )}
+            >
+              Any persona
+            </button>
+            {usedIds.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  onChange(p.id);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'w-full text-left px-2.5 py-1.5 rounded-md text-[12.5px] flex items-center gap-2 transition',
+                  value === p.id ? 'bg-muted text-fg' : 'text-subtle hover:bg-muted/60 hover:text-fg',
+                )}
+              >
+                <span>{p.emoji}</span>
+                <span className="truncate">{p.name}</span>
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function DateFilterChip({
+  value,
+  onChange,
+}: {
+  value: DateBucket;
+  onChange: (v: DateBucket) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  const labels: Record<DateBucket, string> = {
+    any: 'Any time',
+    '7d': 'Past 7 days',
+    '30d': 'Past 30 days',
+    '90d': 'Past 90 days',
+  };
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((s) => !s)}
+        className={cn(
+          'inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11.5px] border transition',
+          value !== 'any'
+            ? 'bg-accent/10 border-accent/40 text-fg'
+            : 'border-hairline text-subtle hover:text-fg hover:border-border',
+        )}
+      >
+        <CalendarDays className="h-3 w-3" />
+        <span>{labels[value]}</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.14 }}
+            className="absolute left-0 top-full mt-1 surface rounded-lg shadow-lg p-1 z-30 min-w-[140px]"
+          >
+            {(['any', '7d', '30d', '90d'] as DateBucket[]).map((b) => (
+              <button
+                key={b}
+                type="button"
+                onClick={() => {
+                  onChange(b);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'w-full text-left px-2.5 py-1.5 rounded-md text-[12.5px] transition',
+                  value === b ? 'bg-muted text-fg' : 'text-subtle hover:bg-muted/60 hover:text-fg',
+                )}
+              >
+                {labels[b]}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
